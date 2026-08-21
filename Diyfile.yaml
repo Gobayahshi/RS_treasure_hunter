@@ -1,0 +1,7 @@
+name: rs-treasure
+entrypoint: app.py
+service_type: python
+properties:
+- revision: master
+  ingress:
+    path: /rs-treasure

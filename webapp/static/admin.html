@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RS-Treasure Hunter - 관리자</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand">🛠️ RS-Treasure Hunter 관리자</span>
+</header>
+
+<main id="admin-app">
+
+  <section class="screen">
+    <h2>엑셀 마스터 업로드</h2>
+    <div class="card">
+      <p class="muted small">
+        판매점 엑셀에는 주소만 있으면 됩니다. 올리면 주소로 GPS 좌표를 자동 변환합니다.
+      </p>
+      <a class="btn-secondary" href="api/import/template">양식 다운로드</a>
+      <input id="excelFiles" type="file" accept=".xlsx" multiple />
+      <button id="importBtn" class="btn-primary">엑셀 올리기</button>
+      <p id="importMessage" class="muted small"></p>
+      <pre id="importResult" class="import-result hidden"></pre>
+    </div>
+  </section>
+
+  <section class="screen">
+    <h2>판매점 빠른 등록 (GPS 테스트용)</h2>
+    <div class="card">
+      <input id="storeName" type="text" placeholder="판매점명" />
+      <input id="storeAddress" type="text" placeholder="주소" />
+      <input id="storeDealerCode" type="text" placeholder="소속대리점ID (선택)" />
+      <div class="row">
+        <input id="storeLat" type="number" step="0.000001" placeholder="위도(lat)" />
+        <input id="storeLng" type="number" step="0.000001" placeholder="경도(lng)" />
+      </div>
+      <button id="useMyLocationBtn" class="btn-secondary">현재 위치로 채우기</button>
+      <button id="addStoreBtn" class="btn-primary">등록</button>
+      <p id="storeMessage" class="muted small"></p>
+    </div>
+  </section>
+
+  <section class="screen">
+    <div class="between" style="margin-top:0">
+      <h2>대리점</h2>
+    </div>
+    <div id="dealerList" class="list"></div>
+  </section>
+
+  <section class="screen">
+    <h2>영업사원</h2>
+    <div id="repList" class="list"></div>
+  </section>
+
+  <section class="screen">
+    <div class="between">
+      <h2>판매점 목록</h2>
+      <div>
+        <button id="geocodeBtn" class="btn-secondary">주소 → 좌표 변환</button>
+        <button id="spawnBtn" class="btn-secondary">보물 스폰 실행</button>
+      </div>
+    </div>
+    <p id="spawnMessage" class="muted small"></p>
+    <div class="card geocode-status-card">
+      <div class="between geocode-status-header">
+        <strong>좌표 변환 진행 상황</strong>
+        <button id="refreshGeocodeStatusBtn" class="btn-secondary compact">새로고침</button>
+      </div>
+      <div class="progress-track">
+        <div id="geocodeProgressFill" class="progress-fill" style="width: 0%"></div>
+      </div>
+      <p id="geocodeStatusSummary" class="muted small">아직 집계 전입니다.</p>
+      <pre id="geocodeStatusLog" class="import-result small"></pre>
+    </div>
+    <div id="storeList" class="list"></div>
+  </section>
+
+  <section class="screen">
+    <h2>랭킹보드</h2>
+    <div id="leaderboard" class="list"></div>
+  </section>
+
+</main>
+
+<script src="js/admin.js"></script>
+</body>
+</html>

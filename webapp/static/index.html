@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>RS-Treasure Hunter</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand">🏆 RS-Treasure Hunter</span>
+  <nav id="topnav" class="hidden">
+    <button data-nav="map">지도</button>
+    <button data-nav="rewards">포인트</button>
+    <button id="logoutBtn">로그아웃</button>
+  </nav>
+</header>
+
+<main id="app">
+
+  <!-- 로그인 화면 -->
+  <section id="screen-login" class="screen">
+    <div class="card center-card">
+      <h1>🏆 RS-Treasure Hunter</h1>
+      <p class="muted">엑셀에 등록된 고유ID로 로그인하세요</p>
+      <p class="muted small">초기 비밀번호는 고유ID와 같습니다</p>
+      <input id="loginCode" type="text" placeholder="고유ID (사원코드)" autocomplete="username" />
+      <input id="loginPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
+      <button id="loginBtn" class="btn-primary">시작하기</button>
+      <p id="loginError" class="error hidden"></p>
+    </div>
+  </section>
+
+  <!-- 지도 + 근처 보물 목록 화면 -->
+  <section id="screen-map" class="screen hidden">
+    <div class="screen-header">
+      <h2><span id="repGreeting"></span>님, 환영합니다 👋</h2>
+      <button id="refreshBtn" class="btn-secondary">새로고침</button>
+    </div>
+    <p id="mapError" class="error hidden"></p>
+    <div id="treasureMap" class="treasure-map" aria-label="주변 보물 지도"></div>
+    <p id="mapHint" class="muted small map-hint">파란 점: 내 위치 · 핀: 보물 · 지도를 옮기면 그 주변 매장이 표시됩니다</p>
+    <div id="treasureList" class="list"></div>
+  </section>
+
+  <!-- 방문 인증 화면 -->
+  <section id="screen-visit" class="screen hidden">
+    <div class="card center-card">
+      <h2 id="visitStoreName"></h2>
+      <p class="muted">매장 근처에서 약 5초만 머물러 주세요</p>
+      <div class="progress-track">
+        <div id="visitProgressFill" class="progress-fill" style="width:0%"></div>
+      </div>
+      <p id="visitProgressText">0 / 5초</p>
+      <button id="visitCancelBtn" class="btn-secondary">취소</button>
+      <div id="visitResult" class="hidden">
+        <p id="visitResultEmoji" class="result-emoji"></p>
+        <h3 id="visitResultTitle"></h3>
+        <p id="visitResultPoints" class="result-points"></p>
+        <p id="visitResultTier"></p>
+        <p id="visitResultScore" class="muted"></p>
+        <p id="visitResultReasons" class="muted small"></p>
+        <button id="visitDoneBtn" class="btn-primary">지도로 돌아가기</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 포인트/리워드 화면 -->
+  <section id="screen-rewards" class="screen hidden">
+    <div class="card total-card">
+      <p>누적 포인트</p>
+      <h1 id="totalPoints">0P</h1>
+    </div>
+
+    <h3 class="section-title">비밀번호 변경</h3>
+    <div class="card">
+      <p id="passwordHint" class="muted small hidden">초기 비밀번호(고유ID)를 사용 중입니다. 원하는 비밀번호로 바꿔주세요.</p>
+      <input id="currentPassword" type="password" placeholder="현재 비밀번호" autocomplete="current-password" />
+      <input id="newPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
+      <input id="newPasswordConfirm" type="password" placeholder="새 비밀번호 확인" autocomplete="new-password" />
+      <button id="changePasswordBtn" class="btn-primary">비밀번호 변경</button>
+      <p id="passwordMessage" class="muted small"></p>
+    </div>
+
+    <h3 class="section-title">적립 내역</h3>
+    <div id="ledgerList" class="list"></div>
+  </section>
+
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,372 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  background: #f8fafc;
+  color: #1f2937;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  background: #fff;
+  border-bottom: 1px solid #eee;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+#topnav button {
+  border: none;
+  background: none;
+  color: #2563eb;
+  font-weight: 600;
+  margin-left: 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+#logoutBtn {
+  color: #999 !important;
+}
+
+main {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.screen {
+  padding-bottom: 24px;
+}
+
+.screen-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  margin-bottom: 16px;
+}
+
+.center-card {
+  text-align: center;
+  max-width: 360px;
+  margin: 40px auto;
+}
+
+.center-card h1 {
+  font-size: 24px;
+  margin-bottom: 4px;
+}
+
+.muted {
+  color: #666;
+  font-size: 14px;
+}
+
+.small {
+  font-size: 12px;
+}
+
+input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  font-size: 15px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.row input {
+  flex: 1;
+}
+
+button {
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.btn-primary {
+  width: 100%;
+  padding: 13px;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.btn-primary:disabled {
+  background: #cbd5e1;
+}
+
+.btn-secondary {
+  width: 100%;
+  padding: 11px;
+  background: #eef2ff;
+  color: #2563eb;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.error {
+  color: #dc2626;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.treasure-map {
+  width: 100%;
+  height: 320px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  margin-bottom: 8px;
+  background: #e5e7eb;
+  z-index: 1;
+}
+
+.map-hint {
+  margin: 0 0 14px;
+}
+
+.treasure-marker {
+  background: transparent;
+  border: none;
+}
+
+.treasure-pin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  border: 2px solid #fff;
+}
+
+.map-popup {
+  min-width: 160px;
+}
+
+.map-popup .store-name {
+  font-size: 14px;
+  margin: 4px 0 2px;
+}
+
+.map-popup .distance {
+  margin: 6px 0;
+  font-weight: 600;
+  color: #374151;
+}
+
+.map-visit-btn {
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.leaflet-container {
+  font: inherit;
+}
+
+.item-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+.item-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.tier-badge {
+  font-weight: 700;
+}
+
+.distance {
+  color: #666;
+}
+
+.store-name {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 2px 0;
+}
+
+.store-address {
+  color: #666;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.visit-button {
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 600;
+}
+
+.visit-button:disabled {
+  background: #cbd5e1;
+}
+
+.empty {
+  text-align: center;
+  color: #999;
+  margin-top: 40px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 12px;
+  background: #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 16px 0 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #2563eb;
+  transition: width 0.3s ease;
+}
+
+.result-emoji {
+  font-size: 52px;
+  margin: 8px 0 4px;
+}
+
+.result-points {
+  font-size: 24px;
+  font-weight: 700;
+  color: #16a34a;
+}
+
+.total-card {
+  text-align: center;
+  background: #2563eb;
+  color: #fff;
+}
+
+.total-card h1 {
+  margin: 4px 0 0;
+  font-size: 32px;
+}
+
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 4px 0 10px;
+}
+
+.ledger-row {
+  display: flex;
+  justify-content: space-between;
+  background: #fff;
+  padding: 12px 16px;
+  border-radius: 8px;
+}
+
+.ledger-points {
+  color: #16a34a;
+  font-weight: 700;
+}
+
+.between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 24px;
+}
+
+.geocode-status-card {
+  margin-bottom: 16px;
+}
+
+.geocode-status-header {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.compact {
+  width: auto;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.rank-row {
+  display: flex;
+  justify-content: space-between;
+  background: #fff;
+  padding: 12px 16px;
+  border-radius: 8px;
+}
+
+.import-result {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+a.btn-secondary {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+}
