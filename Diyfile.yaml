@@ -1,6 +1,6 @@
 name: rs-treasure
 entrypoint: app.py
-service_type: python
+service_type: web
 properties:
 - revision: master
   ingress:
