@@ -4,10 +4,11 @@ import sqlite3
 from contextlib import contextmanager
 
 _BASE_DIR = os.path.dirname(__file__)
-# Playground 컨테이너는 앱 디렉터리가 읽기전용일 수 있어, 운영 DB는 /tmp 를 기본으로 쓴다.
+# Render/Playground 컨테이너는 앱 디렉터리가 읽기전용일 수 있어, 운영 DB는 /tmp 를 쓴다.
+_on_hosted = bool(os.environ.get("RENDER") or os.environ.get("CONTEXT_PATH"))
 _DEFAULT_DB = (
     os.path.join("/tmp", "rs_treasure.db")
-    if os.environ.get("CONTEXT_PATH")
+    if _on_hosted
     else os.path.join(_BASE_DIR, "rs_treasure.db")
 )
 DB_PATH = os.environ.get("DB_PATH") or _DEFAULT_DB
