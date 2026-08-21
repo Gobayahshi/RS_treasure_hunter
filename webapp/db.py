@@ -4,7 +4,13 @@ import sqlite3
 from contextlib import contextmanager
 
 _BASE_DIR = os.path.dirname(__file__)
-DB_PATH = os.environ.get("DB_PATH") or os.path.join(_BASE_DIR, "rs_treasure.db")
+# Playground 컨테이너는 앱 디렉터리가 읽기전용일 수 있어, 운영 DB는 /tmp 를 기본으로 쓴다.
+_DEFAULT_DB = (
+    os.path.join("/tmp", "rs_treasure.db")
+    if os.environ.get("CONTEXT_PATH")
+    else os.path.join(_BASE_DIR, "rs_treasure.db")
+)
+DB_PATH = os.environ.get("DB_PATH") or _DEFAULT_DB
 SEED_DB_PATH = os.path.join(_BASE_DIR, "seed", "rs_treasure.db")
 
 
@@ -13,7 +19,9 @@ def _ensure_db_file() -> None:
     if os.path.exists(DB_PATH):
         return
     if os.path.exists(SEED_DB_PATH):
-        os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+        parent = os.path.dirname(DB_PATH)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         shutil.copy2(SEED_DB_PATH, DB_PATH)
 
 SCHEMA = """

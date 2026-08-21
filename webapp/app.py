@@ -44,7 +44,8 @@ class _PrefixMiddleware:
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 app.wsgi_app = _PrefixMiddleware(app.wsgi_app, CONTEXT_PATH)
-GEOCODE_LOG_PATH = Path(__file__).with_name("geocode_progress.log")
+_LOG_DIR = Path("/tmp") if CONTEXT_PATH else Path(__file__).resolve().parent
+GEOCODE_LOG_PATH = _LOG_DIR / "geocode_progress.log"
 init_db()
 
 
