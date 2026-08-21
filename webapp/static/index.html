@@ -14,6 +14,7 @@
   <nav id="topnav" class="hidden">
     <button data-nav="map">지도</button>
     <button data-nav="rewards">포인트</button>
+    <button data-nav="settings">설정</button>
     <button id="logoutBtn">로그아웃</button>
   </nav>
 </header>
@@ -73,9 +74,15 @@
       <p>누적 포인트</p>
       <h1 id="totalPoints">0P</h1>
     </div>
+    <h3 class="section-title">적립 내역</h3>
+    <div id="ledgerList" class="list"></div>
+  </section>
 
-    <h3 class="section-title">비밀번호 변경</h3>
+  <!-- 설정: 비밀번호 변경 -->
+  <section id="screen-settings" class="screen hidden">
+    <h2>설정</h2>
     <div class="card">
+      <h3 class="section-title">비밀번호 변경</h3>
       <p id="passwordHint" class="muted small hidden">초기 비밀번호(고유ID)를 사용 중입니다. 원하는 비밀번호로 바꿔주세요.</p>
       <input id="currentPassword" type="password" placeholder="현재 비밀번호" autocomplete="current-password" />
       <input id="newPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
@@ -83,9 +90,6 @@
       <button id="changePasswordBtn" class="btn-primary">비밀번호 변경</button>
       <p id="passwordMessage" class="muted small"></p>
     </div>
-
-    <h3 class="section-title">적립 내역</h3>
-    <div id="ledgerList" class="list"></div>
   </section>
 
 </main>

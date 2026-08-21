@@ -127,11 +127,6 @@ async function handleLogin() {
     saveRep(rep);
     $("loginPassword").value = "";
     enterApp();
-    if (rep.using_initial_password) {
-      // 포인트 탭에서 변경 안내가 보이도록 힌트만 켠다.
-      const hint = $("passwordHint");
-      if (hint) hint.classList.remove("hidden");
-    }
   } catch (err) {
     $("loginError").textContent = err.message || "로그인에 실패했습니다.";
     $("loginError").classList.remove("hidden");
@@ -149,11 +144,12 @@ function enterApp() {
   $("repGreeting").textContent = `${rep.name}${dealer}`;
   if (rep.using_initial_password) {
     $("passwordHint").classList.remove("hidden");
+    showScreen("settings");
   } else {
     $("passwordHint").classList.add("hidden");
+    showScreen("map");
+    loadTreasures();
   }
-  showScreen("map");
-  loadTreasures();
 }
 
 // ---------------------------------------------------------------------------
@@ -512,12 +508,6 @@ function renderVisitResult(result) {
 async function loadRewardsScreen() {
   const data = await api(`/points/${rep.id}`);
   $("totalPoints").textContent = `${data.total}P`;
-
-  if (rep.using_initial_password) {
-    $("passwordHint").classList.remove("hidden");
-  } else {
-    $("passwordHint").classList.add("hidden");
-  }
 
   const container = $("ledgerList");
   container.innerHTML = "";

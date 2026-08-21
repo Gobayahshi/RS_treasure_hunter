@@ -147,10 +147,8 @@ def migrate_schema(conn) -> None:
     for row in conn.execute(
         "SELECT id, employee_code FROM reps WHERE password_hash IS NULL OR password_hash = ''"
     ).fetchall():
-        conn.execute(
-            "UPDATE reps SET password_hash = ? WHERE id = ?",
-            (generate_password_hash(row["employee_code"]), row["id"]),
-        )
+    # 테스트 계정 1107711(고바야시)은 소속 대리점 없음
+    conn.execute("UPDATE reps SET dealer_id = NULL WHERE employee_code = '1107711'")
 
 
 def init_db() -> None:

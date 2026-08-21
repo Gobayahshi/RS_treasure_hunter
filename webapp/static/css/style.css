@@ -26,6 +26,12 @@ body {
   font-size: 16px;
 }
 
+#topnav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 #topnav button {
   border: none;
   background: none;
