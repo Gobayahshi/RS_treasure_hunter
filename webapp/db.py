@@ -4,10 +4,12 @@ import sqlite3
 from contextlib import contextmanager
 
 _BASE_DIR = os.path.dirname(__file__)
-# Render/Playground 컨테이너는 앱 디렉터리가 읽기전용일 수 있어, 운영 DB는 /tmp 를 쓴다.
+# Render 유료 Disk를 /data 에 붙이면 재고/주소가 재시작 후에도 남는다.
+# Disk가 없으면 /tmp (배포마다 초기화).
 _on_hosted = bool(os.environ.get("RENDER") or os.environ.get("CONTEXT_PATH"))
+_persistent_dir = "/data" if os.path.isdir("/data") else "/tmp"
 _DEFAULT_DB = (
-    os.path.join("/tmp", "rs_treasure.db")
+    os.path.join(_persistent_dir, "rs_treasure.db")
     if _on_hosted
     else os.path.join(_BASE_DIR, "rs_treasure.db")
 )
