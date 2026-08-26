@@ -33,6 +33,19 @@
   <div id="admin-app" class="hidden">
 
     <section class="screen">
+      <h2>재고 엑셀</h2>
+      <div class="card">
+        <p class="muted small">
+          재고현황 엑셀을 올리면 해당 대리점 재고만 갱신됩니다. 지도와 질문은
+          <a href="inventory">재고 화면</a>에서 하시면 됩니다.
+        </p>
+        <input id="inventoryFile" type="file" accept=".xlsx" />
+        <button id="inventoryImportBtn" class="btn-primary">재고 엑셀 올리기</button>
+        <p id="inventoryImportMessage" class="muted small"></p>
+      </div>
+    </section>
+
+    <section class="screen">
       <h2>보물 심기</h2>
       <div class="card">
         <p class="muted small">지도를 눌러 위치를 지정하거나, 현재 위치/위경도를 직접 입력하세요. 포인트는 이 보물에만 적용됩니다.</p>

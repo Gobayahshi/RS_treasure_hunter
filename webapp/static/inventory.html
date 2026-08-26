@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>재고 지도 · 질문 - RS-Treasure</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="admin-page inventory-assist">
+
+<header class="topbar">
+  <span class="brand">재고 지도 · 질문</span>
+  <nav id="chatNav" class="hidden">
+    <a class="muted small" href="admin">관리자</a>
+    <span id="chatUser" class="muted small"></span>
+    <button id="chatLogoutBtn">로그아웃</button>
+  </nav>
+</header>
+
+<main>
+  <section id="screen-chat-login" class="screen">
+    <div class="card center-card">
+      <h1>재고 지도 · 질문</h1>
+      <p class="muted">지도에서 위치를 보고, 오른쪽에 글로 물어보세요. 음성은 다음 단계에서 붙입니다.</p>
+      <input id="chatUsername" type="text" placeholder="관리자 아이디" autocomplete="username" />
+      <input id="chatPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
+      <button type="button" id="chatLoginBtn" class="btn-primary">시작하기</button>
+      <p id="chatLoginError" class="error hidden"></p>
+    </div>
+  </section>
+
+  <div id="chat-app" class="hidden">
+    <div class="inventory-shell">
+      <div class="inventory-map-pane">
+        <div class="inventory-map-tools">
+          <button type="button" id="areaSelectBtn">영역 선택</button>
+          <button type="button" id="areaClearBtn" class="hidden">선택 해제</button>
+        </div>
+        <div id="chatMap" class="treasure-map" aria-label="재고 지도"></div>
+        <div id="areaTableWrap" class="inventory-area-table-wrap hidden">
+          <div class="inventory-area-table-head">선택한 영역 재고</div>
+          <div class="inventory-area-table-scroll">
+            <table id="areaTable">
+              <thead>
+                <tr>
+                  <th>기종</th>
+                  <th>대수</th>
+                  <th>매장</th>
+                  <th>30일+</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+              <tfoot></tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+      <aside class="inventory-chat">
+        <div id="chatLog" class="chat-log"></div>
+        <div class="chat-suggestions">
+          <button type="button" data-q="오래 묵은 재고 어디가 많아?">오래된 재고</button>
+          <button type="button" data-q="유원이랑 프리스비 재고 비교해줘">대리점 비교</button>
+          <button type="button" data-q="현재 서울에 있는 재고 숫자가 몇 대인지?">서울 재고</button>
+          <button type="button" data-q="김포에 뭐가 있어?">김포</button>
+          <button type="button" data-q="이 영역에 기종별 재고 몇 대야">이 영역</button>
+          <button type="button" data-q="내 위치를 기준으로 가장 가까운 곳에 있는 곳의 재고 확인">가까운 곳</button>
+        </div>
+        <form id="chatForm" class="chat-composer">
+          <button type="button" class="mic-btn" id="chatMicBtn" title="다음 단계: 음성 입력" disabled>🎤</button>
+          <input id="chatInput" type="text" placeholder="재고 위치를 물어보세요" autocomplete="off" />
+          <button type="submit" class="btn-primary">보내기</button>
+        </form>
+      </aside>
+    </div>
+  </div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="js/inventory-chat.js"></script>
+</body>
+</html>

@@ -94,6 +94,10 @@ def guess_kind(filename: str, sheet_name: str, headers: set[str]) -> str | None:
     file_name = filename.lower().replace(" ", "")
     if "안내" in sheet or "guide" in sheet or "readme" in sheet:
         return None
+    if "재고" in sheet or "재고" in filename.lower().replace(" ", ""):
+        return "inventory"
+    if "보유처매장코드" in headers or "대표상품명" in headers:
+        return "inventory"
     # 시트명이 파일명보다 우선이다. (파일명에 '판매점'이 들어 있어도 대리점 시트를 판매점으로 오인하지 않게)
     if "영업" in sheet or "사원" in sheet or "rep" in sheet:
         return "reps"
@@ -127,7 +131,7 @@ def guess_kind(filename: str, sheet_name: str, headers: set[str]) -> str | None:
 
 
 def parse_uploads(files: list[tuple[str, bytes]]) -> dict[str, list[dict[str, str]]]:
-    buckets: dict[str, list[dict[str, str]]] = {"dealers": [], "reps": [], "stores": []}
+    buckets: dict[str, list[dict[str, str]]] = {"dealers": [], "reps": [], "stores": [], "inventory": []}
     unknown_sheets: list[str] = []
 
     for filename, data in files:
@@ -138,6 +142,8 @@ def parse_uploads(files: list[tuple[str, bytes]]) -> dict[str, list[dict[str, st
                 if not rows:
                     continue
                 kind = guess_kind(filename, ws.title, set(rows[0].keys()))
+                if kind == "inventory":
+                    continue
                 if not kind:
                     title_norm = ws.title.lower().replace(" ", "")
                     if "안내" in title_norm or "guide" in title_norm:

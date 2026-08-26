@@ -22,6 +22,14 @@ from confidence import (
 from db import db_session, init_db
 from excel_import import build_stats_xlsx, build_template_xlsx, parse_uploads, upsert_masters
 from geocode import geocode_missing_stores
+from inventory import (
+    inventory_map_points,
+    inventory_model_breakdown,
+    is_inventory_workbook,
+    parse_inventory_xlsx,
+    replace_inventory,
+)
+from inventory_chat import ask_inventory
 
 # Playground는 CONTEXT_PATH=/rs-treasure 로 붙인다. 로컬은 빈 값.
 CONTEXT_PATH = (os.environ.get("CONTEXT_PATH") or "").rstrip("/")
@@ -232,6 +240,12 @@ def index():
 @app.route("/admin")
 def admin():
     html_path = Path(app.static_folder) / "admin.html"
+    return Response(_inject_app_base(html_path.read_text(encoding="utf-8")), mimetype="text/html")
+
+
+@app.route("/inventory")
+def inventory_page():
+    html_path = Path(app.static_folder) / "inventory.html"
     return Response(_inject_app_base(html_path.read_text(encoding="utf-8")), mimetype="text/html")
 
 
@@ -1304,6 +1318,110 @@ def import_excel():
             "note": f"좌표 없는 매장 {missing}곳은 백그라운드에서 변환합니다.",
         }
     return jsonify(summary), 200
+
+
+@app.route("/api/inventory/excel", methods=["POST"])
+@require_admin
+def import_inventory():
+    upload = request.files.get("file") or (request.files.getlist("files") or [None])[0]
+    if not upload:
+        return jsonify({"error": "재고현황 xlsx 파일을 올려주세요."}), 400
+    filename = upload.filename or "inventory.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        return jsonify({"error": f"{filename}: .xlsx 만 지원합니다."}), 400
+    data = upload.read()
+    try:
+        if not is_inventory_workbook(data):
+            return jsonify({"error": "재고현황 파일로 보이지 않습니다. 보유처매장코드/대표상품명 열이 필요합니다."}), 400
+        parsed = parse_inventory_xlsx(filename, data)
+    except Exception as exc:
+        return jsonify({"error": f"재고 엑셀을 읽지 못했습니다: {exc}"}), 400
+    if not parsed["rows"]:
+        return jsonify({"error": "재고 행을 찾지 못했습니다."}), 400
+    try:
+        with db_session() as conn:
+            summary = replace_inventory(conn, parsed, now_iso(), new_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(summary), 200
+
+
+@app.route("/api/inventory/map")
+@require_admin
+def inventory_map():
+    model = (request.args.get("model") or "").strip()
+    include_retail = (request.args.get("include_retail") or "").strip() in {"1", "true", "yes"}
+    region = (request.args.get("region") or "").strip()
+    keyword = (request.args.get("keyword") or "").strip()
+    dealer_id = (request.args.get("dealer_id") or "").strip()
+    dealer_code = (request.args.get("dealer") or request.args.get("dealer_code") or "").strip()
+    aged_only = (request.args.get("aged_only") or "").strip() in {"1", "true", "yes"}
+    lat = lng = None
+    bbox = None
+    if request.args.get("lat") not in (None, "") and request.args.get("lng") not in (None, ""):
+        try:
+            lat = float(request.args.get("lat"))
+            lng = float(request.args.get("lng"))
+        except ValueError:
+            return jsonify({"error": "lat, lng는 숫자여야 합니다."}), 400
+    if all(request.args.get(k) not in (None, "") for k in ("south", "west", "north", "east")):
+        try:
+            bbox = {
+                "south": float(request.args.get("south")),
+                "west": float(request.args.get("west")),
+                "north": float(request.args.get("north")),
+                "east": float(request.args.get("east")),
+            }
+        except ValueError:
+            return jsonify({"error": "south, west, north, east는 숫자여야 합니다."}), 400
+    with db_session() as conn:
+        if not dealer_id and dealer_code:
+            dealer = conn.execute(
+                "SELECT id FROM dealers WHERE dealer_code = ?", (dealer_code,)
+            ).fetchone()
+            dealer_id = dealer["id"] if dealer else dealer_code
+        data = inventory_map_points(
+            conn,
+            model,
+            include_retail,
+            region=region,
+            lat=lat,
+            lng=lng,
+            keyword=keyword,
+            dealer_id=dealer_id or None,
+            bbox=bbox,
+            aged_only=aged_only,
+        )
+        if bbox:
+            data["area_model_totals"] = inventory_model_breakdown(
+                conn,
+                dealer_id=dealer_id or None,
+                region=region,
+                keyword=keyword,
+                bbox=bbox,
+                limit=80,
+            )
+        return jsonify(data)
+
+
+@app.route("/api/inventory/ask", methods=["POST"])
+@require_admin
+def inventory_ask():
+    body = request.get_json(force=True, silent=True) or {}
+    text = (body.get("text") or body.get("message") or "").strip()
+    if not text:
+        return jsonify({"error": "질문을 입력해주세요."}), 400
+    lat = lng = None
+    if body.get("lat") not in (None, "") and body.get("lng") not in (None, ""):
+        try:
+            lat = float(body.get("lat"))
+            lng = float(body.get("lng"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "lat, lng는 숫자여야 합니다."}), 400
+    bbox = body.get("bbox")
+    with db_session() as conn:
+        result = ask_inventory(conn, text, lat=lat, lng=lng, bbox=bbox)
+    return jsonify(result)
 
 
 @app.route("/api/stores/geocode", methods=["POST"])

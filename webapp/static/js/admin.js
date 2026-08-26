@@ -3,6 +3,12 @@ const TOKEN_KEY = "rs_admin_token";
 let plantMap = null;
 let plantMarker = null;
 let geocodeTimer = null;
+let inventoryMap = null;
+let inventoryMarkers = null;
+let inventoryMeMarker = null;
+let inventoryRegion = "";
+let inventoryDealer = "";
+let lastInventoryData = null;
 
 function $(id) {
   return document.getElementById(id);
@@ -28,6 +34,14 @@ function authHeaders(extra) {
   const token = getToken();
   if (token) headers["X-Admin-Token"] = token;
   return headers;
+}
+
+function escHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function api(path, options = {}) {
@@ -74,6 +88,7 @@ function showLoggedIn(username) {
   $("adminNav").classList.remove("hidden");
   $("adminUser").textContent = username ? `${username}님` : "";
   ensurePlantMap();
+  ensureInventoryMap();
 }
 
 async function handleAdminLogin() {
@@ -139,6 +154,287 @@ function ensurePlantMap() {
   plantMap.on("click", (e) => setPlantLatLng(e.latlng.lat, e.latlng.lng, false));
   setTimeout(() => plantMap.invalidateSize(), 80);
   return plantMap;
+}
+
+function stockPinColor(point) {
+  const days = point && point.max_hold_days;
+  if (days != null && days >= 30) return "#dc2626";
+  if (days != null && days >= 15) return "#d97706";
+  return "#2563eb";
+}
+
+function stockIcon(point, nearest = false) {
+  const qty = typeof point === "number" ? point : (point && point.qty) || 0;
+  const shared = point && point.shared;
+  const cls = `stock-pin${nearest ? " nearest" : ""}${shared ? " shared" : ""}`;
+  return L.divIcon({
+    className: "stock-marker",
+    html: `<div class="${cls}" style="background:${stockPinColor(point)}">${qty}</div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor: [0, -16],
+  });
+}
+
+function offsetOverlaps(points) {
+  const groups = new Map();
+  for (const p of points) {
+    const key = `${Number(p.lat).toFixed(5)},${Number(p.lng).toFixed(5)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  const out = [];
+  for (const group of groups.values()) {
+    group.forEach((p, i) => {
+      const copy = { ...p };
+      if (group.length > 1) {
+        const angle = (2 * Math.PI * i) / group.length;
+        const dist = 0.00022;
+        copy.lat = Number(p.lat) + dist * Math.cos(angle);
+        copy.lng = Number(p.lng) + dist * Math.sin(angle);
+      }
+      out.push(copy);
+    });
+  }
+  return out;
+}
+
+function ensureInventoryMap() {
+  if (inventoryMap) {
+    setTimeout(() => inventoryMap.invalidateSize(), 80);
+    return inventoryMap;
+  }
+  const el = $("inventoryMap");
+  if (!el) return null;
+  inventoryMap = L.map("inventoryMap").setView([37.5, 126.9], 10);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap",
+  }).addTo(inventoryMap);
+  inventoryMarkers = L.layerGroup().addTo(inventoryMap);
+  setTimeout(() => inventoryMap.invalidateSize(), 80);
+  return inventoryMap;
+}
+
+function formatKm(meters) {
+  if (meters == null) return "";
+  if (meters < 1000) return `${Math.round(meters)}m`;
+  return `${(meters / 1000).toFixed(1)}km`;
+}
+
+function renderInventoryMap(data) {
+  const map = ensureInventoryMap();
+  if (!map || !inventoryMarkers) return;
+  inventoryMarkers.clearLayers();
+  if (inventoryMeMarker) {
+    map.removeLayer(inventoryMeMarker);
+    inventoryMeMarker = null;
+  }
+  const nearestCode = data.nearest && data.nearest.store_code;
+  const points = offsetOverlaps(data.points || []);
+  const bounds = [];
+  let nearestMarker = null;
+  for (const p of points) {
+    const isNearest = nearestCode && p.store_code === nearestCode;
+    const marker = L.marker([p.lat, p.lng], { icon: stockIcon(p, isNearest) });
+    const hold = p.max_hold_days != null
+      ? ` · 최장 ${p.max_hold_days}일${p.aged_qty ? ` · 30일+ ${p.aged_qty}대` : ""}`
+      : "";
+    const dist = p.distance_meters != null ? `<div class="distance">내 위치에서 ${formatKm(p.distance_meters)}</div>` : "";
+    const addr = [p.address, p.detail_address].filter(Boolean).join(" ");
+    const dealers = (p.dealers || [])
+      .map((d) => `${escHtml(d.dealer_name)} ${d.qty}대`)
+      .join(" · ");
+    marker.bindPopup(
+      `<div class="map-popup">
+        <div class="store-name">${escHtml(p.name)} <span class="muted">(${escHtml(p.store_code)})</span></div>
+        <div class="muted small">${escHtml(addr || "주소 없음")}</div>
+        <div class="distance">${escHtml(data.model)} ${p.qty}대${hold}</div>
+        ${dealers ? `<div class="muted small">${dealers}</div>` : ""}
+        ${dist}
+      </div>`
+    );
+    marker.addTo(inventoryMarkers);
+    bounds.push([p.lat, p.lng]);
+    if (isNearest) nearestMarker = marker;
+  }
+  if (data.origin) {
+    inventoryMeMarker = L.circleMarker([data.origin.lat, data.origin.lng], {
+      radius: 8,
+      color: "#1d4ed8",
+      weight: 2,
+      fillColor: "#3b82f6",
+      fillOpacity: 0.95,
+    })
+      .bindPopup("내 위치")
+      .addTo(map);
+    bounds.push([data.origin.lat, data.origin.lng]);
+  }
+  if (nearestMarker) {
+    map.setView([data.nearest.lat, data.nearest.lng], 14);
+    nearestMarker.openPopup();
+  } else if (bounds.length === 1) {
+    map.setView(bounds[0], 14);
+  } else if (bounds.length > 1) {
+    map.fitBounds(bounds, { padding: [28, 28], maxZoom: 13 });
+  }
+  setTimeout(() => map.invalidateSize(), 80);
+}
+
+function inventoryQueryParams(extra) {
+  const model = ($("inventoryModel").value || "SM-F971").trim();
+  const params = new URLSearchParams({ model });
+  if (inventoryRegion) params.set("region", inventoryRegion);
+  if (inventoryDealer) params.set("dealer_id", inventoryDealer);
+  if (extra) {
+    Object.entries(extra).forEach(([k, v]) => {
+      if (v != null && v !== "") params.set(k, String(v));
+    });
+  }
+  return params;
+}
+
+function setInventoryQueryResult(data) {
+  const box = $("inventoryQueryResult");
+  if (!box) return;
+  const parts = [];
+  if (data.regions && data.regions.length) {
+    const seoul = data.regions.find((r) => r.region === "서울");
+    if (seoul) parts.push(`서울 ${seoul.qty}대 / ${seoul.stores}곳`);
+    if (inventoryRegion) {
+      parts.push(`선택 지역(${inventoryRegion}) ${data.mapped_qty}대 / ${data.points.length}곳`);
+    }
+  }
+  if (data.nearest) {
+    parts.push(
+      `가장 가까운 곳: ${data.nearest.name} (${data.nearest.store_code}) ${formatKm(data.nearest.distance_meters)} · ${data.nearest.qty}대`
+    );
+  }
+  box.textContent = parts.join(" · ");
+}
+
+async function loadInventoryMap(extra) {
+  if (!$("inventoryMap")) return;
+  const summary = $("inventorySummary");
+  const unmappedBox = $("inventoryUnmapped");
+  try {
+    const params = inventoryQueryParams(extra);
+    const data = await api(`/inventory/map?${params.toString()}`);
+    if (extra && extra.lat != null) {
+      data.origin = { lat: Number(extra.lat), lng: Number(extra.lng) };
+    }
+    lastInventoryData = data;
+    const asOf = data.as_of_date ? ` · 기준일 ${data.as_of_date}` : "";
+    if (!data.total_qty && !(data.regions || []).length) {
+      summary.textContent = "올린 재고현황이 없습니다. 위에서 엑셀을 올려주세요.";
+      unmappedBox.innerHTML = "";
+      setInventoryQueryResult(data);
+      renderInventoryMap({ points: [], model: data.model });
+      return;
+    }
+    const regionLabel = inventoryRegion ? `${inventoryRegion} ` : "판매점 ";
+    const dealerBit = (data.dealer_totals || []).map((d) => `${d.dealer_name} ${d.qty}대`).join(" · ");
+    const sharedBit = data.shared_store_count ? ` · 공유 판매점 ${data.shared_store_count}곳` : "";
+    summary.textContent = `${data.model} ${regionLabel}${data.mapped_qty}대 / ${data.points.length}곳${asOf}` +
+      (dealerBit ? ` · ${dealerBit}` : "") +
+      sharedBit +
+      (data.unmapped_qty ? ` · 좌표 없음 ${data.unmapped_qty}대 / ${data.unmapped.length}곳` : "");
+    setInventoryQueryResult(data);
+    renderInventoryDealerChips(data);
+    renderInventoryMap(data);
+    unmappedBox.innerHTML = "";
+    for (const u of data.unmapped || []) {
+      const el = document.createElement("div");
+      el.className = "item-card";
+      el.innerHTML = `<div class="store-name">${escHtml(u.name)} <span class="muted">(${escHtml(u.store_code)})</span></div>
+        <div class="muted small">주신 주소 리스트(주소.xlsx)에 이 P코드가 없어 지도에 못 올렸습니다 · ${escHtml(data.model)} ${u.qty}대</div>`;
+      unmappedBox.appendChild(el);
+    }
+  } catch (err) {
+    summary.textContent = String(err.message || err);
+  }
+}
+
+function handleInventoryRegionClick(ev) {
+  const btn = ev.target.closest("[data-region]");
+  if (!btn) return;
+  inventoryRegion = btn.getAttribute("data-region") || "";
+  document.querySelectorAll("#inventoryRegionChips .chip").forEach((el) => {
+    el.classList.toggle("active", el === btn);
+  });
+  loadInventoryMap();
+}
+
+function renderInventoryDealerChips(data) {
+  const box = $("inventoryDealerChips");
+  if (!box) return;
+  const totals = data.dealer_totals || [];
+  box.innerHTML = "";
+  if (!totals.length) return;
+  const all = document.createElement("button");
+  all.type = "button";
+  all.className = `chip${inventoryDealer ? "" : " active"}`;
+  all.setAttribute("data-dealer", "");
+  all.textContent = "대리점 전체";
+  box.appendChild(all);
+  for (const d of totals) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `chip${inventoryDealer === d.dealer_id ? " active" : ""}`;
+    btn.setAttribute("data-dealer", d.dealer_id || "");
+    btn.textContent = `${d.dealer_name} ${d.qty}`;
+    box.appendChild(btn);
+  }
+}
+
+function handleInventoryDealerClick(ev) {
+  const btn = ev.target.closest("[data-dealer]");
+  if (!btn) return;
+  inventoryDealer = btn.getAttribute("data-dealer") || "";
+  document.querySelectorAll("#inventoryDealerChips .chip").forEach((el) => {
+    el.classList.toggle("active", el === btn);
+  });
+  loadInventoryMap();
+}
+
+function handleInventoryNearest() {
+  const msg = $("inventoryQueryResult");
+  if (!navigator.geolocation) {
+    msg.textContent = "이 브라우저는 위치 정보를 지원하지 않습니다.";
+    return;
+  }
+  msg.textContent = "현재 위치를 확인하는 중...";
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      loadInventoryMap({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      });
+    },
+    (err) => {
+      msg.textContent = `위치 조회 실패: ${err.message}`;
+    },
+    { enableHighAccuracy: true, timeout: 12000 }
+  );
+}
+
+async function handleInventoryImport() {
+  const input = $("inventoryFile");
+  const msg = $("inventoryImportMessage");
+  if (!input.files.length) {
+    msg.textContent = "재고현황 xlsx 파일을 선택해주세요.";
+    return;
+  }
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  msg.textContent = "재고 엑셀을 읽는 중...";
+  try {
+    const data = await api("/inventory/excel", { method: "POST", body: form });
+    const partner = (data.by_holder_type && data.by_holder_type.partner) || 0;
+    msg.textContent = `업로드 완료: ${data.dealer_name || ""} ${data.row_count}행 (판매점 ${partner}대, 기준일 ${data.as_of_date || "-"}). 지도는 재고 화면에서 확인하세요.`;
+    if ($("inventoryMap")) await loadInventoryMap();
+  } catch (err) {
+    msg.textContent = String(err.message || err);
+  }
 }
 
 function handlePlantUseMyLocation() {
@@ -379,16 +675,22 @@ async function loadStores() {
     container.innerHTML = '<p class="empty">등록된 판매점이 없습니다.</p>';
     return;
   }
-  for (const s of stores) {
+  const preview = stores.slice(0, 30);
+  const coded = stores.filter((s) => s.store_code).length;
+  const summary = document.createElement("p");
+  summary.className = "muted small";
+  summary.textContent = `전체 ${stores.length}곳 (판매점코드 ${coded}곳). 아래는 최근 30곳만 보여 줍니다.`;
+  container.appendChild(summary);
+  for (const s of preview) {
     const el = document.createElement("div");
     el.className = "item-card";
     const coordText = hasCoords(s)
       ? `lat: ${s.lat}, lng: ${s.lng}`
       : "좌표 없음 — 주소 변환 필요";
     el.innerHTML = `
-      <div class="store-name">${s.name}${s.store_code ? ` <span class="muted">(${s.store_code})</span>` : ""}</div>
-      <div class="store-address">${[s.address, s.detail_address].filter(Boolean).join(" ")}</div>
-      <div class="muted small">${s.dealer_name || "소속대리점 없음"} (${s.dealer_code || "-"}) · ${coordText}</div>
+      <div class="store-name">${escHtml(s.name)}${s.store_code ? ` <span class="muted">(${escHtml(s.store_code)})</span>` : ""}</div>
+      <div class="store-address">${escHtml([s.address, s.detail_address].filter(Boolean).join(" "))}</div>
+      <div class="muted small">${escHtml(s.dealer_name || "소속대리점 없음")} (${escHtml(s.dealer_code || "-")}) · ${coordText}</div>
     `;
     container.appendChild(el);
   }
@@ -444,6 +746,7 @@ async function reloadAll() {
     loadGeocodeStatus(),
     loadSettings(),
     loadPlanted(),
+    $("inventoryMap") ? loadInventoryMap() : Promise.resolve(),
   ]);
 }
 
@@ -626,5 +929,15 @@ document.addEventListener("DOMContentLoaded", () => {
   $("geocodeBtn").addEventListener("click", handleGeocode);
   $("refreshGeocodeStatusBtn").addEventListener("click", loadGeocodeStatus);
   $("importBtn").addEventListener("click", handleImport);
+  $("inventoryImportBtn").addEventListener("click", handleInventoryImport);
+  if ($("inventoryMapBtn")) $("inventoryMapBtn").addEventListener("click", () => loadInventoryMap());
+  if ($("inventoryNearestBtn")) $("inventoryNearestBtn").addEventListener("click", handleInventoryNearest);
+  if ($("inventoryRegionChips")) $("inventoryRegionChips").addEventListener("click", handleInventoryRegionClick);
+  if ($("inventoryDealerChips")) $("inventoryDealerChips").addEventListener("click", handleInventoryDealerClick);
+  if ($("inventoryModel")) {
+    $("inventoryModel").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") loadInventoryMap();
+    });
+  }
   restoreSession();
 });

@@ -126,6 +126,35 @@ CREATE TABLE IF NOT EXISTS rewards (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS inventory_uploads (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    as_of_date TEXT,
+    row_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    dealer_id TEXT,
+    dealer_code TEXT,
+    dealer_name TEXT
+);
+
+CREATE TABLE IF NOT EXISTS inventory_items (
+    id TEXT PRIMARY KEY,
+    upload_id TEXT NOT NULL REFERENCES inventory_uploads(id),
+    store_code TEXT NOT NULL,
+    holder_name TEXT,
+    holder_type TEXT NOT NULL,
+    product_short TEXT,
+    model_name TEXT,
+    purchase_price TEXT,
+    inbound_date TEXT,
+    moved_date TEXT,
+    hold_days INTEGER,
+    serial TEXT,
+    dealer_id TEXT,
+    dealer_code TEXT,
+    dealer_name TEXT
+);
+
 -- 판매점이 수천 건이라 주변 검색/스폰에 필요한 인덱스를 둔다.
 CREATE INDEX IF NOT EXISTS idx_stores_latlng ON stores(lat, lng);
 CREATE INDEX IF NOT EXISTS idx_stores_address ON stores(address);
@@ -134,11 +163,14 @@ CREATE INDEX IF NOT EXISTS idx_treasures_unclaimed ON treasures(claimed_at);
 CREATE INDEX IF NOT EXISTS idx_samples_session ON location_samples(session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_rep ON visit_sessions(rep_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_rep ON point_ledger(rep_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_store ON inventory_items(store_code);
+CREATE INDEX IF NOT EXISTS idx_inventory_product ON inventory_items(product_short);
+CREATE INDEX IF NOT EXISTS idx_inventory_holder ON inventory_items(holder_type);
 """
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
@@ -214,9 +246,70 @@ def migrate_schema(conn) -> None:
     conn.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('points_normal', '10')")
     conn.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('points_rare', '30')")
 
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS inventory_uploads (
+            id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            as_of_date TEXT,
+            row_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            dealer_id TEXT,
+            dealer_code TEXT,
+            dealer_name TEXT
+        );
+        CREATE TABLE IF NOT EXISTS inventory_items (
+            id TEXT PRIMARY KEY,
+            upload_id TEXT NOT NULL REFERENCES inventory_uploads(id),
+            store_code TEXT NOT NULL,
+            holder_name TEXT,
+            holder_type TEXT NOT NULL,
+            product_short TEXT,
+            model_name TEXT,
+            purchase_price TEXT,
+            inbound_date TEXT,
+            moved_date TEXT,
+            hold_days INTEGER,
+            serial TEXT,
+            dealer_id TEXT,
+            dealer_code TEXT,
+            dealer_name TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_inventory_store ON inventory_items(store_code);
+        CREATE INDEX IF NOT EXISTS idx_inventory_product ON inventory_items(product_short);
+        CREATE INDEX IF NOT EXISTS idx_inventory_holder ON inventory_items(holder_type);
+        """
+    )
+
+    for table in ("inventory_uploads", "inventory_items"):
+        cols = _columns(conn, table)
+        for col in ("dealer_id", "dealer_code", "dealer_name"):
+            if cols and col not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_inventory_dealer ON inventory_items(dealer_id)")
+
+    frisbee = conn.execute("SELECT * FROM dealers WHERE dealer_code = 'D15051'").fetchone()
+    if frisbee:
+        conn.execute(
+            """
+            UPDATE inventory_uploads
+            SET dealer_id = ?, dealer_code = ?, dealer_name = ?
+            WHERE dealer_id IS NULL OR dealer_id = ''
+            """,
+            (frisbee["id"], frisbee["dealer_code"], frisbee["name"]),
+        )
+        conn.execute(
+            """
+            UPDATE inventory_items
+            SET dealer_id = ?, dealer_code = ?, dealer_name = ?
+            WHERE dealer_id IS NULL OR dealer_id = ''
+            """,
+            (frisbee["id"], frisbee["dealer_code"], frisbee["name"]),
+        )
+
     # 최초 1회만 기본 관리자를 만든다. 이미 있으면 비밀번호를 덮어쓰지 않는다.
     admin_username = (os.environ.get("ADMIN_USERNAME") or "admin").strip() or "admin"
-    admin_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or "TreasureAdmin2026"
+    admin_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or "admin"
     existing_admin = conn.execute("SELECT id FROM admins WHERE username = ?", (admin_username,)).fetchone()
     if not existing_admin:
         from datetime import datetime
