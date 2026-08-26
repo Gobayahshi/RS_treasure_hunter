@@ -73,7 +73,9 @@ CREATE TABLE IF NOT EXISTS admins (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    dealer_id TEXT,
+    role TEXT NOT NULL DEFAULT 'super'
 );
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -183,6 +185,52 @@ def _columns(conn, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
+DEALER_PORTAL_ACCOUNTS = (
+    ("yuwon", "yuwon", "D14746", "유원"),
+    ("frisbee", "frisbee", "D15051", "프리스비"),
+)
+
+
+def _ensure_dealer_portal_accounts(conn) -> None:
+    """유원·프리스비 재고 화면 로그인 계정을 만든다. 이미 있으면 비밀번호는 유지한다."""
+    import uuid
+    from datetime import datetime
+
+    from werkzeug.security import generate_password_hash
+
+    now = datetime.utcnow().isoformat()
+    for username, password, code, name in DEALER_PORTAL_ACCOUNTS:
+        dealer = conn.execute("SELECT * FROM dealers WHERE dealer_code = ?", (code,)).fetchone()
+        if not dealer:
+            dealer_id = uuid.uuid4().hex
+            conn.execute(
+                "INSERT INTO dealers (id, dealer_code, name, created_at) VALUES (?, ?, ?, ?)",
+                (dealer_id, code, name, now),
+            )
+            dealer = conn.execute("SELECT * FROM dealers WHERE dealer_code = ?", (code,)).fetchone()
+        existing = conn.execute("SELECT id FROM admins WHERE username = ?", (username,)).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE admins SET dealer_id = ?, role = 'dealer' WHERE id = ?",
+                (dealer["id"], existing["id"]),
+            )
+            continue
+        conn.execute(
+            """
+            INSERT INTO admins (id, username, password_hash, created_at, dealer_id, role)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"dealer-{username}",
+                username,
+                generate_password_hash(password),
+                now,
+                dealer["id"],
+                "dealer",
+            ),
+        )
+
+
 def migrate_schema(conn) -> None:
     """이미 만들어진 DB에도 대리점/비밀번호 컬럼을 추가한다."""
     from werkzeug.security import generate_password_hash
@@ -232,7 +280,9 @@ def migrate_schema(conn) -> None:
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            dealer_id TEXT,
+            role TEXT NOT NULL DEFAULT 'super'
         );
         CREATE TABLE IF NOT EXISTS admin_sessions (
             token TEXT PRIMARY KEY,
@@ -309,6 +359,13 @@ def migrate_schema(conn) -> None:
             (frisbee["id"], frisbee["dealer_code"], frisbee["name"]),
         )
 
+    admin_cols = _columns(conn, "admins")
+    if admin_cols and "dealer_id" not in admin_cols:
+        conn.execute("ALTER TABLE admins ADD COLUMN dealer_id TEXT")
+    if admin_cols and "role" not in admin_cols:
+        conn.execute("ALTER TABLE admins ADD COLUMN role TEXT")
+    conn.execute("UPDATE admins SET role = 'super' WHERE role IS NULL OR role = ''")
+
     # 최초 1회만 기본 관리자를 만든다. 이미 있으면 비밀번호를 덮어쓰지 않는다.
     admin_username = (os.environ.get("ADMIN_USERNAME") or "admin").strip() or "admin"
     admin_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or "admin"
@@ -317,14 +374,17 @@ def migrate_schema(conn) -> None:
         from datetime import datetime
 
         conn.execute(
-            "INSERT INTO admins (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO admins (id, username, password_hash, created_at, role) VALUES (?, ?, ?, ?, ?)",
             (
                 "admin-default",
                 admin_username,
                 generate_password_hash(admin_password),
                 datetime.utcnow().isoformat(),
+                "super",
             ),
         )
+
+    _ensure_dealer_portal_accounts(conn)
 
 
 def init_db() -> None:

@@ -1,4 +1,4 @@
-const TOKEN_KEY = "rs_admin_token";
+const TOKEN_KEY = "rs_inventory_token";
 
 let chatMap = null;
 let chatMarkers = null;
@@ -11,6 +11,13 @@ let areaLast = null;
 let areaRect = null;
 let areaBounds = null;
 let areaBoundOnce = false;
+let inventoryUser = {
+  username: "",
+  role: "super",
+  dealer_id: "",
+  dealer_name: "",
+  can_see_all: true,
+};
 
 function $(id) {
   return document.getElementById(id);
@@ -57,7 +64,7 @@ async function api(path, options = {}) {
     setToken("");
     showLoggedOut();
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.message || "관리자 로그인이 필요합니다.");
+    throw new Error(data.message || "대리점 로그인이 필요합니다.");
   }
   if (!res.ok) {
     const data = await res.json().catch(() => null);
@@ -73,11 +80,18 @@ function showLoggedOut() {
   $("chatNav").classList.add("hidden");
 }
 
-function showLoggedIn(username) {
+function showLoggedIn(user) {
+  inventoryUser = user || inventoryUser;
   $("screen-chat-login").classList.add("hidden");
   $("chat-app").classList.remove("hidden");
   $("chatNav").classList.remove("hidden");
-  $("chatUser").textContent = username ? `${username}님` : "";
+  const name = inventoryUser.dealer_name || inventoryUser.username || "";
+  $("chatUser").textContent = name ? `${name}` : "";
+  const adminLink = $("chatAdminLink");
+  if (adminLink) adminLink.classList.toggle("hidden", !inventoryUser.can_see_all);
+  document.querySelectorAll("[data-all-dealers]").forEach((el) => {
+    el.classList.toggle("hidden", !inventoryUser.can_see_all);
+  });
   ensureChatMap();
 }
 
@@ -395,6 +409,38 @@ function addUser(text) {
   addBubble("user", text);
 }
 
+async function handleInventoryUpload() {
+  const input = $("inventoryFile");
+  const status = $("inventoryUploadStatus");
+  if (!input || !status) return;
+  const file = input.files && input.files[0];
+  if (!file) {
+    status.textContent = "xlsx 파일을 선택해주세요.";
+    return;
+  }
+  const form = new FormData();
+  form.append("file", file);
+  status.textContent = "올리는 중...";
+  try {
+    const data = await api("/inventory/excel", { method: "POST", body: form });
+    const name = data.dealer_name || inventoryUser.dealer_name || "";
+    status.textContent = `${name} ${Number(data.row_count || 0).toLocaleString("ko-KR")}행으로 교체했습니다.`;
+    addBot(
+      `${name} 재고를 올렸습니다. ${Number(data.row_count || 0).toLocaleString("ko-KR")}행이며, 이 대리점의 이전 재고는 지웠습니다.`
+    );
+    loadDefaultMap();
+  } catch (e) {
+    status.textContent = e.message || "업로드에 실패했습니다.";
+  }
+}
+
+function pickDealer(username, btn) {
+  $("chatUsername").value = username;
+  document.querySelectorAll(".dealer-pick button").forEach((el) => el.classList.remove("active"));
+  if (btn) btn.classList.add("active");
+  $("chatPassword").focus();
+}
+
 async function handleLogin() {
   const username = $("chatUsername").value.trim();
   const password = $("chatPassword").value;
@@ -406,13 +452,13 @@ async function handleLogin() {
     return;
   }
   try {
-    const data = await api("/admin/login", {
+    const data = await api("/inventory/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
     setToken(data.token);
     $("chatPassword").value = "";
-    showLoggedIn(data.username);
+    showLoggedIn(data);
     greet();
   } catch (e) {
     err.textContent = e.message || "로그인에 실패했습니다.";
@@ -422,7 +468,7 @@ async function handleLogin() {
 
 async function handleLogout() {
   try {
-    await api("/admin/logout", { method: "POST" });
+    await api("/inventory/logout", { method: "POST" });
   } catch (_) {
     /* ignore */
   }
@@ -432,9 +478,16 @@ async function handleLogout() {
 
 function greet() {
   $("chatLog").innerHTML = "";
-  addBot(
-    "재고 현황을 보고 답합니다. 어디에 몇 대인지, 오래 묵은 재고, 대리점 비교, 어디를 먼저 처리할지 물어보세요. 지도에서 「영역 선택」으로 사각형을 그리면 그 안의 기종별 대수도 계산합니다. 기종을 안 주시면 지도는 F971·A175N·S931N 기준입니다."
-  );
+  const dealer = inventoryUser.dealer_name;
+  if (dealer && !inventoryUser.can_see_all) {
+    addBot(
+      `${dealer} 재고만 보여 드립니다. 엑셀을 올리면 이전 재고는 지우고 이번 파일만 남습니다. 지도에서 위치를 보고 오른쪽에 물어보세요. 기종을 안 주시면 지도는 F971·A175N·S931N 기준입니다.`
+    );
+  } else {
+    addBot(
+      "재고 현황을 보고 답합니다. 어디에 몇 대인지, 오래 묵은 재고, 대리점 비교, 어디를 먼저 처리할지 물어보세요. 지도에서 「영역 선택」으로 사각형을 그리면 그 안의 기종별 대수도 계산합니다. 기종을 안 주시면 지도는 F971·A175N·S931N 기준입니다."
+    );
+  }
   loadDefaultMap();
 }
 
@@ -528,8 +581,8 @@ async function restore() {
     return;
   }
   try {
-    const me = await api("/admin/me");
-    showLoggedIn(me.username);
+    const me = await api("/inventory/me");
+    showLoggedIn(me);
     greet();
   } catch (_) {
     setToken("");
@@ -539,6 +592,9 @@ async function restore() {
 
 document.addEventListener("DOMContentLoaded", () => {
   $("chatLoginBtn").addEventListener("click", handleLogin);
+  $("pickYuwon").addEventListener("click", (e) => pickDealer("yuwon", e.currentTarget));
+  $("pickFrisbee").addEventListener("click", (e) => pickDealer("frisbee", e.currentTarget));
+  $("inventoryUploadBtn").addEventListener("click", handleInventoryUpload);
   $("chatPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleLogin();
   });

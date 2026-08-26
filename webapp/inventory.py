@@ -225,10 +225,14 @@ def infer_dealer(conn, filename: str, rows: list[dict[str, str]] | None = None):
     return None
 
 
-def replace_inventory(conn, parsed: dict[str, Any], now_iso: str, new_id) -> dict:
+def replace_inventory(conn, parsed: dict[str, Any], now_iso: str, new_id, dealer=None) -> dict:
+    """해당 대리점의 이전 재고는 지우고 이번 파일만 남긴다."""
     clear_inventory_cache()
     rows = parsed.get("rows") or []
-    dealer = infer_dealer(conn, parsed.get("filename") or "", rows)
+    if dealer is None:
+        dealer = infer_dealer(conn, parsed.get("filename") or "", rows)
+    elif not isinstance(dealer, dict):
+        dealer = dict(dealer)
     if not dealer:
         raise ValueError("어느 대리점 재고인지 모릅니다. 파일명에 대리점코드(예: D14746)를 넣어주세요.")
 

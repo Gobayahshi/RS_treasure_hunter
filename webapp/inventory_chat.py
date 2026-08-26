@@ -280,8 +280,10 @@ def ask_inventory(
     lat: float | None = None,
     lng: float | None = None,
     bbox=None,
+    dealer_id: str | None = None,
 ) -> dict:
-    dealers = [dict(r) for r in conn.execute("SELECT id, dealer_code, name FROM dealers").fetchall()]
+    all_dealers = [dict(r) for r in conn.execute("SELECT id, dealer_code, name FROM dealers").fetchall()]
+    dealers = [d for d in all_dealers if d["id"] == dealer_id] if dealer_id else all_dealers
     nlu = "rules"
     parsed = None
     if llm_available():
@@ -291,6 +293,12 @@ def ask_inventory(
     if not parsed:
         parsed = parse_inventory_question(text, dealers)
     parsed["nlu"] = nlu
+    if dealer_id:
+        scoped = next((d for d in all_dealers if d["id"] == dealer_id), None)
+        parsed["dealer_id"] = dealer_id
+        parsed["dealer_name"] = (scoped or {}).get("name") or parsed.get("dealer_name") or ""
+        if parsed.get("intent") == "compare":
+            parsed["intent"] = "analyze"
     result = _answer_from_parsed(conn, parsed, lat, lng, bbox=bbox)
     result["nlu"] = nlu
     return result
@@ -366,13 +374,21 @@ def _answer_from_parsed(
     wanted_bbox = normalize_bbox(bbox)
 
     if intent == "help":
-        answer = (
-            "재고 현황을 보고 답합니다. 어디에 몇 대인지뿐 아니라 "
-            "체화(30일+), 대리점 비교, 어디를 먼저 처리할지까지 물어보세요. "
-            "지도에서 「영역 선택」으로 사각형을 그리면 그 안의 기종별 대수도 계산합니다. "
-            "예: 「오래 묵은 재고 어디가 많아?」, 「유원이랑 프리스비 비교해줘」, "
-            "「김포에 뭐가 있어?」, 「이 영역에 A175 몇 대야」."
-        )
+        if parsed.get("dealer_id"):
+            name = parsed.get("dealer_name") or "이 대리점"
+            answer = (
+                f"{name} 재고만 보여 드립니다. 엑셀을 다시 올리면 이전 재고는 지우고 이번 파일만 남습니다. "
+                "어디에 몇 대인지, 오래 묵은 재고, 지도에서 고른 영역도 물어볼 수 있습니다. "
+                "예: 「오래 묵은 재고 어디가 많아?」, 「김포에 뭐가 있어?」, 「이 영역에 A175 몇 대야」."
+            )
+        else:
+            answer = (
+                "재고 현황을 보고 답합니다. 어디에 몇 대인지뿐 아니라 "
+                "체화(30일+), 대리점 비교, 어디를 먼저 처리할지까지 물어보세요. "
+                "지도에서 「영역 선택」으로 사각형을 그리면 그 안의 기종별 대수도 계산합니다. "
+                "예: 「오래 묵은 재고 어디가 많아?」, 「유원이랑 프리스비 비교해줘」, "
+                "「김포에 뭐가 있어?」, 「이 영역에 A175 몇 대야」."
+            )
         return {
             "intent": intent,
             "model": model,

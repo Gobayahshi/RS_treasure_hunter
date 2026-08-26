@@ -150,9 +150,13 @@ def _admin_from_token(conn, token: str):
         return None
     row = conn.execute(
         """
-        SELECT a.id, a.username, s.created_at AS session_created_at
+        SELECT a.id, a.username, a.dealer_id,
+               COALESCE(NULLIF(a.role, ''), 'super') AS role,
+               d.name AS dealer_name, d.dealer_code,
+               s.created_at AS session_created_at
         FROM admin_sessions s
         JOIN admins a ON a.id = s.admin_id
+        LEFT JOIN dealers d ON d.id = a.dealer_id
         WHERE s.token = ?
         """,
         (token,),
@@ -163,7 +167,18 @@ def _admin_from_token(conn, token: str):
     if datetime.utcnow() - created > timedelta(days=ADMIN_SESSION_DAYS):
         conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
         return None
-    return {"id": row["id"], "username": row["username"]}
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "dealer_id": row["dealer_id"] or "",
+        "dealer_code": row["dealer_code"] or "",
+        "dealer_name": row["dealer_name"] or "",
+        "role": "dealer" if (row["role"] == "dealer" or row["dealer_id"]) else "super",
+    }
+
+
+def _is_dealer_user(user: dict | None) -> bool:
+    return bool(user) and (user.get("role") == "dealer" or user.get("dealer_id"))
 
 
 def _admin_auth_error():
@@ -182,9 +197,69 @@ def require_admin(fn):
         err = _admin_auth_error()
         if err is not None:
             return err
+        if _is_dealer_user(g.admin):
+            return jsonify(
+                {
+                    "error": "ADMIN_ONLY",
+                    "message": "대리점 계정은 재고 화면(/inventory)에서 이용하세요.",
+                }
+            ), 403
         return fn(*args, **kwargs)
 
     return wrapped
+
+
+def _inventory_auth_error():
+    token = (request.headers.get("X-Admin-Token") or "").strip()
+    with db_session() as conn:
+        user = _admin_from_token(conn, token)
+    if not user:
+        return jsonify({"error": "INVENTORY_AUTH_REQUIRED", "message": "대리점 로그인이 필요합니다."}), 401
+    g.inventory_user = user
+    return None
+
+
+def require_inventory_user(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        err = _inventory_auth_error()
+        if err is not None:
+            return err
+        return fn(*args, **kwargs)
+
+    return wrapped
+
+
+def _scoped_dealer_id():
+    user = getattr(g, "inventory_user", None) or {}
+    if _is_dealer_user(user):
+        return user.get("dealer_id") or ""
+    return ""
+
+
+def _create_session(conn, admin_id: str) -> str:
+    cutoff = (datetime.utcnow() - timedelta(days=ADMIN_SESSION_DAYS)).isoformat()
+    conn.execute("DELETE FROM admin_sessions WHERE created_at < ?", (cutoff,))
+    token = secrets.token_urlsafe(32)
+    conn.execute(
+        "INSERT INTO admin_sessions (token, admin_id, created_at) VALUES (?, ?, ?)",
+        (token, admin_id, now_iso()),
+    )
+    return token
+
+
+def _user_payload(user: dict, token: str | None = None) -> dict:
+    data = {
+        "username": user.get("username") or "",
+        "role": user.get("role") or "super",
+        "dealer_id": user.get("dealer_id") or "",
+        "dealer_code": user.get("dealer_code") or "",
+        "dealer_name": user.get("dealer_name") or "",
+        "can_see_all": not _is_dealer_user(user),
+    }
+    if token:
+        data["token"] = token
+    return data
 
 
 def _read_geocode_status_from_log() -> dict:
@@ -359,14 +434,16 @@ def admin_login():
         admin = conn.execute("SELECT * FROM admins WHERE username = ?", (username,)).fetchone()
         if not admin or not check_password_hash(admin["password_hash"], password):
             return jsonify({"error": "INVALID_ADMIN", "message": "관리자 아이디 또는 비밀번호가 올바르지 않습니다."}), 401
-
-        cutoff = (datetime.utcnow() - timedelta(days=ADMIN_SESSION_DAYS)).isoformat()
-        conn.execute("DELETE FROM admin_sessions WHERE created_at < ?", (cutoff,))
-        token = secrets.token_urlsafe(32)
-        conn.execute(
-            "INSERT INTO admin_sessions (token, admin_id, created_at) VALUES (?, ?, ?)",
-            (token, admin["id"], now_iso()),
-        )
+        dealer_id = admin["dealer_id"] if "dealer_id" in admin.keys() else ""
+        role = admin["role"] if "role" in admin.keys() else "super"
+        if (role or "") == "dealer" or dealer_id:
+            return jsonify(
+                {
+                    "error": "DEALER_USE_INVENTORY",
+                    "message": "대리점 계정은 /inventory 재고 화면에서 로그인해주세요.",
+                }
+            ), 403
+        token = _create_session(conn, admin["id"])
         return jsonify({"token": token, "username": admin["username"]})
 
 
@@ -383,6 +460,38 @@ def admin_logout():
 @require_admin
 def admin_me():
     return jsonify({"username": g.admin["username"]})
+
+
+@app.route("/api/inventory/login", methods=["POST"])
+def inventory_login():
+    body = request.get_json(force=True)
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    if not username or not password:
+        return jsonify({"error": "username, password required", "message": "아이디와 비밀번호를 입력해주세요."}), 400
+
+    with db_session() as conn:
+        admin = conn.execute("SELECT * FROM admins WHERE username = ?", (username,)).fetchone()
+        if not admin or not check_password_hash(admin["password_hash"], password):
+            return jsonify({"error": "INVALID_LOGIN", "message": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
+        token = _create_session(conn, admin["id"])
+        user = _admin_from_token(conn, token)
+        return jsonify(_user_payload(user or {"username": admin["username"]}, token))
+
+
+@app.route("/api/inventory/logout", methods=["POST"])
+@require_inventory_user
+def inventory_logout():
+    token = (request.headers.get("X-Admin-Token") or "").strip()
+    with db_session() as conn:
+        conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/inventory/me")
+@require_inventory_user
+def inventory_me():
+    return jsonify(_user_payload(g.inventory_user))
 
 
 @app.route("/api/admin/change-password", methods=["POST"])
@@ -1321,7 +1430,7 @@ def import_excel():
 
 
 @app.route("/api/inventory/excel", methods=["POST"])
-@require_admin
+@require_inventory_user
 def import_inventory():
     upload = request.files.get("file") or (request.files.getlist("files") or [None])[0]
     if not upload:
@@ -1340,20 +1449,27 @@ def import_inventory():
         return jsonify({"error": "재고 행을 찾지 못했습니다."}), 400
     try:
         with db_session() as conn:
-            summary = replace_inventory(conn, parsed, now_iso(), new_id)
+            dealer = None
+            scoped = _scoped_dealer_id()
+            if scoped:
+                dealer = conn.execute("SELECT * FROM dealers WHERE id = ?", (scoped,)).fetchone()
+                if not dealer:
+                    return jsonify({"error": "대리점 정보를 찾지 못했습니다."}), 400
+                dealer = dict(dealer)
+            summary = replace_inventory(conn, parsed, now_iso(), new_id, dealer=dealer)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(summary), 200
 
 
 @app.route("/api/inventory/map")
-@require_admin
+@require_inventory_user
 def inventory_map():
     model = (request.args.get("model") or "").strip()
     include_retail = (request.args.get("include_retail") or "").strip() in {"1", "true", "yes"}
     region = (request.args.get("region") or "").strip()
     keyword = (request.args.get("keyword") or "").strip()
-    dealer_id = (request.args.get("dealer_id") or "").strip()
+    dealer_id = _scoped_dealer_id() or (request.args.get("dealer_id") or "").strip()
     dealer_code = (request.args.get("dealer") or request.args.get("dealer_code") or "").strip()
     aged_only = (request.args.get("aged_only") or "").strip() in {"1", "true", "yes"}
     lat = lng = None
@@ -1405,7 +1521,7 @@ def inventory_map():
 
 
 @app.route("/api/inventory/ask", methods=["POST"])
-@require_admin
+@require_inventory_user
 def inventory_ask():
     body = request.get_json(force=True, silent=True) or {}
     text = (body.get("text") or body.get("message") or "").strip()
@@ -1420,7 +1536,14 @@ def inventory_ask():
             return jsonify({"error": "lat, lng는 숫자여야 합니다."}), 400
     bbox = body.get("bbox")
     with db_session() as conn:
-        result = ask_inventory(conn, text, lat=lat, lng=lng, bbox=bbox)
+        result = ask_inventory(
+            conn,
+            text,
+            lat=lat,
+            lng=lng,
+            bbox=bbox,
+            dealer_id=_scoped_dealer_id() or None,
+        )
     return jsonify(result)
 
 
