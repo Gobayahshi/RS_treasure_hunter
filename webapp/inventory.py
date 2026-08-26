@@ -137,7 +137,7 @@ def parse_inventory_xlsx(filename: str, data: bytes) -> dict[str, Any]:
                     raw[h] = cell_str(val)
                 if not any(raw.values()):
                     continue
-                store_code = _pick(raw, HOLDER_CODE_ALIASES)
+                store_code = _pick(raw, HOLDER_CODE_ALIASES).strip().upper()
                 if not store_code:
                     continue
                 hold_raw = _pick(raw, HOLD_DAYS_ALIASES)
@@ -310,6 +310,8 @@ def replace_inventory(conn, parsed: dict[str, Any], now_iso: str, new_id, dealer
 
 def parse_models(model_prefix: str | None) -> list[str]:
     raw = (model_prefix or "").strip().upper().replace(" ", "")
+    if raw in {"ALL", "*", "ALLMODELS"}:
+        return []
     if not raw:
         return list(DEFAULT_MAP_MODELS)
     parts = []
@@ -317,13 +319,15 @@ def parse_models(model_prefix: str | None) -> list[str]:
         token = token.strip()
         if not token:
             continue
+        if token in {"ALL", "*"}:
+            return []
         if token.startswith("SM-"):
             parts.append(token)
         elif token.startswith("SM"):
             parts.append("SM-" + token[2:])
         else:
             parts.append("SM-" + token)
-    return parts or list(DEFAULT_MAP_MODELS)
+    return parts
 
 
 def _has_coords(lat, lng) -> bool:
@@ -520,15 +524,22 @@ def inventory_map_points(
     dealer_id: str | None = None,
     bbox=None,
     aged_only: bool = False,
+    radius_km: float | None = None,
 ) -> dict:
     models = parse_models(model_prefix)
-    model = ",".join(models)
+    model = ",".join(models) if models else "all"
     holders = ("partner", "retail") if include_retail else ("partner",)
     placeholders = ",".join("?" * len(holders))
     wanted_region = (region or "").strip()
     wanted_keyword = (keyword or "").strip()
     wanted_dealer = (dealer_id or "").strip()
     wanted_bbox = normalize_bbox(bbox)
+    try:
+        radius_m = float(radius_km) * 1000 if radius_km not in (None, "") else None
+    except (TypeError, ValueError):
+        radius_m = None
+    if radius_m is not None and radius_m <= 0:
+        radius_m = None
 
     upload_ids = _latest_upload_ids(conn, wanted_dealer or None)
     if not upload_ids:
@@ -539,17 +550,22 @@ def inventory_map_points(
     model_params: list = []
     case_sql = []
     case_params: list = []
-    for name in models:
-        like = f"{name}%"
-        model_wheres.append(
-            "(UPPER(COALESCE(i.product_short, '')) LIKE ? OR UPPER(COALESCE(i.model_name, '')) LIKE ?)"
-        )
-        model_params.extend([like, like])
-        case_sql.append(
-            "WHEN UPPER(COALESCE(i.product_short, '')) LIKE ? OR UPPER(COALESCE(i.model_name, '')) LIKE ? THEN ?"
-        )
-        case_params.extend([like, like, name])
-    model_key_expr = "CASE " + " ".join(case_sql) + " ELSE UPPER(COALESCE(i.product_short, i.model_name, '')) END"
+    if models:
+        for name in models:
+            like = f"{name}%"
+            model_wheres.append(
+                "(UPPER(COALESCE(i.product_short, '')) LIKE ? OR UPPER(COALESCE(i.model_name, '')) LIKE ?)"
+            )
+            model_params.extend([like, like])
+            case_sql.append(
+                "WHEN UPPER(COALESCE(i.product_short, '')) LIKE ? OR UPPER(COALESCE(i.model_name, '')) LIKE ? THEN ?"
+            )
+            case_params.extend([like, like, name])
+        model_key_expr = "CASE " + " ".join(case_sql) + " ELSE UPPER(COALESCE(i.product_short, i.model_name, '')) END"
+        model_filter_sql = "AND (" + " OR ".join(model_wheres) + ")"
+    else:
+        model_key_expr = "UPPER(COALESCE(NULLIF(TRIM(i.product_short), ''), TRIM(i.model_name), ''))"
+        model_filter_sql = ""
     rows = conn.execute(
         f"""
         SELECT
@@ -569,10 +585,10 @@ def inventory_map_points(
             s.lat,
             s.lng
         FROM inventory_items i
-        LEFT JOIN stores s ON s.store_code = i.store_code
+        LEFT JOIN stores s ON UPPER(TRIM(COALESCE(s.store_code, ''))) = UPPER(TRIM(COALESCE(i.store_code, '')))
         WHERE i.upload_id IN ({up_ph})
           AND i.holder_type IN ({placeholders})
-          AND ({" OR ".join(model_wheres)})
+          {model_filter_sql}
         GROUP BY i.store_code, i.dealer_id, model_key
         """,
         (*case_params, AGED_DAYS, *upload_ids, *holders, *model_params),
@@ -625,6 +641,10 @@ def inventory_map_points(
                 haversine_distance_meters(lat, lng, float(item["lat"]), float(item["lng"]))
             )
         points.sort(key=lambda p: (p.get("distance_meters") if p.get("distance_meters") is not None else 10**12, -p["qty"]))
+        if radius_m is not None:
+            nearby = [p for p in points if (p.get("distance_meters") or 10**12) <= radius_m]
+            if nearby:
+                points = nearby
         if points:
             nearest = dict(points[0])
 
@@ -698,6 +718,7 @@ def inventory_map_points(
             else None
         ),
         "aged_only": bool(aged_only),
+        "radius_km": (radius_m / 1000) if radius_m else None,
         "area_model_totals": sorted(
             model_totals.values(), key=lambda m: (-m["qty"], m["model"])
         ),

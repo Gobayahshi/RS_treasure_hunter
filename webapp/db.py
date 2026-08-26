@@ -385,6 +385,61 @@ def migrate_schema(conn) -> None:
         )
 
     _ensure_dealer_portal_accounts(conn)
+    _sync_stores_from_seed(conn)
+
+
+def _sync_stores_from_seed(conn) -> None:
+    """배포 DB에 빠진 판매점 좌표를 시드에서 채운다. 재고 핀이 안 찍히는 경우를 줄인다."""
+    seed_path = os.path.abspath(SEED_DB_PATH)
+    live_path = os.path.abspath(DB_PATH)
+    if not os.path.exists(SEED_DB_PATH) or os.path.normcase(seed_path) == os.path.normcase(live_path):
+        return
+    conn.execute("ATTACH DATABASE ? AS seed", (SEED_DB_PATH,))
+    try:
+        seed_tables = {row[0] for row in conn.execute("SELECT name FROM seed.sqlite_master WHERE type='table'")}
+        if "dealers" in seed_tables:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO dealers (id, dealer_code, name, created_at)
+                SELECT id, dealer_code, name, created_at FROM seed.dealers
+                """
+            )
+        if "stores" in seed_tables:
+            conn.execute(
+                """
+                INSERT INTO stores (
+                    id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
+                )
+                SELECT id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
+                FROM seed.stores s
+                WHERE s.store_code IS NOT NULL AND TRIM(s.store_code) != ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM stores t
+                    WHERE UPPER(TRIM(t.store_code)) = UPPER(TRIM(s.store_code))
+                  )
+                  AND NOT EXISTS (SELECT 1 FROM stores t WHERE t.id = s.id)
+                """
+            )
+            conn.execute(
+                """
+                UPDATE stores
+                SET lat = (
+                        SELECT s.lat FROM seed.stores s
+                        WHERE s.store_code = stores.store_code AND (s.lat != 0 OR s.lng != 0)
+                    ),
+                    lng = (
+                        SELECT s.lng FROM seed.stores s
+                        WHERE s.store_code = stores.store_code AND (s.lat != 0 OR s.lng != 0)
+                    )
+                WHERE (lat = 0 AND lng = 0)
+                  AND EXISTS (
+                    SELECT 1 FROM seed.stores s
+                    WHERE s.store_code = stores.store_code AND (s.lat != 0 OR s.lng != 0)
+                  )
+                """
+            )
+    finally:
+        conn.execute("DETACH DATABASE seed")
 
 
 def init_db() -> None:

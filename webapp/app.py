@@ -1474,6 +1474,12 @@ def inventory_map():
     aged_only = (request.args.get("aged_only") or "").strip() in {"1", "true", "yes"}
     lat = lng = None
     bbox = None
+    radius_km = None
+    if request.args.get("radius_km") not in (None, ""):
+        try:
+            radius_km = float(request.args.get("radius_km"))
+        except ValueError:
+            return jsonify({"error": "radius_km는 숫자여야 합니다."}), 400
     if request.args.get("lat") not in (None, "") and request.args.get("lng") not in (None, ""):
         try:
             lat = float(request.args.get("lat"))
@@ -1507,6 +1513,7 @@ def inventory_map():
             dealer_id=dealer_id or None,
             bbox=bbox,
             aged_only=aged_only,
+            radius_km=radius_km,
         )
         if bbox:
             data["area_model_totals"] = inventory_model_breakdown(

@@ -18,6 +18,8 @@ let inventoryUser = {
   dealer_name: "",
   can_see_all: true,
 };
+let lastCoords = null;
+const MAP_MODELS = "SM-F971,SM-A175N,SM-S931N";
 
 function $(id) {
   return document.getElementById(id);
@@ -262,7 +264,7 @@ function renderAreaTable(data) {
 async function applyAreaBounds(bbox) {
   try {
     const params = new URLSearchParams({
-      model: "SM-F971,SM-A175N,SM-S931N",
+      model: MAP_MODELS,
       south: String(bbox.south),
       west: String(bbox.west),
       north: String(bbox.north),
@@ -322,7 +324,10 @@ function renderChatMap(data, origin) {
       .addTo(map);
     bounds.push([origin.lat, origin.lng]);
   }
-  if (nearestMarker && data.nearest) {
+  if (origin && bounds.length) {
+    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+    if (nearestMarker) nearestMarker.openPopup();
+  } else if (nearestMarker && data.nearest) {
     map.setView([data.nearest.lat, data.nearest.lng], 14);
     nearestMarker.openPopup();
   } else if (bounds.length === 1) {
@@ -428,7 +433,8 @@ async function handleInventoryUpload() {
     addBot(
       `${name} 재고를 올렸습니다. ${Number(data.row_count || 0).toLocaleString("ko-KR")}행이며, 이 대리점의 이전 재고는 지웠습니다.`
     );
-    loadDefaultMap();
+    const mapData = await loadInventoryMap(lastCoords);
+    addBot(describeMap(mapData, lastCoords));
   } catch (e) {
     status.textContent = e.message || "업로드에 실패했습니다.";
   }
@@ -481,20 +487,96 @@ function greet() {
   const dealer = inventoryUser.dealer_name;
   if (dealer && !inventoryUser.can_see_all) {
     addBot(
-      `${dealer} 재고만 보여 드립니다. 엑셀을 올리면 이전 재고는 지우고 이번 파일만 남습니다. 지도에서 위치를 보고 오른쪽에 물어보세요. 기종을 안 주시면 지도는 F971·A175N·S931N 기준입니다.`
+      `${dealer} 재고만 보여 드립니다. 엑셀을 올리면 이전 재고는 지우고 이번 파일만 남습니다. 위치 권한을 허용하면 근처 판매점 재고를 지도에 보여 드립니다.`
     );
   } else {
     addBot(
-      "재고 현황을 보고 답합니다. 어디에 몇 대인지, 오래 묵은 재고, 대리점 비교, 어디를 먼저 처리할지 물어보세요. 지도에서 「영역 선택」으로 사각형을 그리면 그 안의 기종별 대수도 계산합니다. 기종을 안 주시면 지도는 F971·A175N·S931N 기준입니다."
+      "재고 현황을 보고 답합니다. 위치 권한을 허용하면 근처 재고부터 보여 드립니다. 지도에서 「영역 선택」으로 사각형을 그리면 그 안의 기종별 대수도 계산합니다."
     );
   }
-  loadDefaultMap();
+  requestMyLocation({ announce: true });
+}
+
+async function loadInventoryMap(coords) {
+  const params = new URLSearchParams({ model: MAP_MODELS });
+  if (coords) {
+    params.set("lat", String(coords.lat));
+    params.set("lng", String(coords.lng));
+    params.set("radius_km", "20");
+  }
+  const data = await api(`/inventory/map?${params}`);
+  renderChatMap(data, coords || null);
+  return data;
+}
+
+function describeMap(data, coords) {
+  const mapped = Number((data && data.mapped_qty) || 0);
+  const unmapped = Number((data && data.unmapped_qty) || 0);
+  const stores = ((data && data.points) || []).length;
+  if (!mapped && !unmapped) {
+    return "표시할 판매점 재고가 없습니다. 엑셀을 올려 주세요. 판매점(P코드) 재고만 지도에 나옵니다.";
+  }
+  if (!mapped && unmapped) {
+    return `재고 ${unmapped.toLocaleString("ko-KR")}대가 있지만 판매점 좌표가 없어 지도에 찍지 못했습니다.`;
+  }
+  const nearest = data && data.nearest;
+  if (coords && nearest) {
+    return `지금 위치 기준 약 20km 안 ${stores}곳, ${mapped.toLocaleString("ko-KR")}대입니다. 가장 가까운 곳은 ${nearest.name} (${formatKm(nearest.distance_meters)}) · ${nearest.qty}대입니다.`;
+  }
+  return `지도에 판매점 ${stores}곳, ${mapped.toLocaleString("ko-KR")}대를 표시했습니다.`;
+}
+
+async function requestMyLocation(options = {}) {
+  const announce = !!options.announce;
+  const btn = $("myLocationBtn");
+  if (btn) btn.classList.add("active");
+  if (!navigator.geolocation) {
+    if (announce) addBot("이 브라우저는 위치 정보를 지원하지 않아 전체 재고를 표시합니다.");
+    await loadInventoryMap(null).then((data) => {
+      if (announce) addBot(describeMap(data, null));
+    }).catch((err) => addBot(String(err.message || err)));
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      lastCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      try {
+        const data = await loadInventoryMap(lastCoords);
+        if ((!data.points || !data.points.length) && lastCoords) {
+          const nationwide = await loadInventoryMap(null);
+          renderChatMap(nationwide, lastCoords);
+          if (announce) {
+            addBot("근처 20km 안에서는 표시할 재고가 없어, 같은 3개 기종을 전국으로 보여 드립니다.");
+            addBot(describeMap(nationwide, lastCoords));
+          }
+          return;
+        }
+        if (announce) addBot(describeMap(data, lastCoords));
+      } catch (err) {
+        addBot(String(err.message || err));
+      }
+    },
+    async (err) => {
+      if (btn) btn.classList.remove("active");
+      try {
+        const data = await loadInventoryMap(null);
+        if (announce) {
+          addBot(
+            `위치를 쓰지 못해 전체 재고를 표시합니다. (${err.message || "권한 거부"}) 브라우저에서 위치 권한을 허용하면 근처 재고를 볼 수 있습니다.`
+          );
+          addBot(describeMap(data, null));
+        }
+      } catch (e) {
+        addBot(String(e.message || e));
+      }
+    },
+    { enableHighAccuracy: true, timeout: 12000 }
+  );
 }
 
 async function loadDefaultMap() {
   try {
-    const data = await api("/inventory/map?model=SM-F971,SM-A175N,SM-S931N");
-    renderChatMap(data);
+    await loadInventoryMap(lastCoords);
   } catch (_) {
     /* 지도는 부가 */
   }
@@ -614,6 +696,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
   $("areaClearBtn").addEventListener("click", clearArea);
+  $("myLocationBtn").addEventListener("click", () => requestMyLocation({ announce: true }));
   $("chatMicBtn").addEventListener("click", () => {
     addBot("음성 질문/답변은 다음 단계에서 붙입니다. 지금은 글로 물어봐 주세요.");
   });

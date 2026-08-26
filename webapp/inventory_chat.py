@@ -260,7 +260,7 @@ def parse_inventory_question(text: str, dealers: list[dict] | None = None) -> di
 
     return {
         "intent": intent,
-        "model": model,
+        "model": model or ",".join(DEFAULT_MAP_MODELS),
         "models": [model] if model else list(DEFAULT_MAP_MODELS),
         "region": region if intent in {"region", "nearest", "analyze", "aged", "compare", "bbox"} else "",
         "keyword": keyword if intent in {"keyword", "nearest", "analyze", "aged", "compare", "bbox"} else "",
@@ -370,7 +370,13 @@ def _answer_from_parsed(
     bbox=None,
 ) -> dict:
     intent = parsed["intent"]
-    model = parsed.get("model") or ",".join(DEFAULT_MAP_MODELS)
+    specified = [m for m in (parsed.get("models") or []) if m]
+    if specified:
+        model = ",".join(specified)
+    elif (parsed.get("model") or "").strip() and (parsed.get("model") or "").strip().lower() not in {"all", "*"}:
+        model = parsed.get("model")
+    else:
+        model = ",".join(DEFAULT_MAP_MODELS)
     wanted_bbox = normalize_bbox(bbox)
 
     if intent == "help":
