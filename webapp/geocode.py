@@ -125,11 +125,49 @@ def geocode_address(address: str) -> GeocodeResult | None:
     return geocode_nominatim(address)
 
 
-def geocode_missing_stores(conn, sleep_seconds: float | None = None) -> dict:
-    """좌표가 없는 판매점을 주소로 변환해 채운다."""
-    rows = conn.execute(
-        "SELECT id, name, address, lat, lng FROM stores WHERE lat = 0 AND lng = 0"
+def copy_coords_for_same_address(conn) -> int:
+    """같은 기본주소를 쓰는 매장끼리, 이미 있는 좌표를 복사한다."""
+    sources = conn.execute(
+        """
+        SELECT address, lat, lng FROM stores
+        WHERE lat != 0 OR lng != 0
+        """
     ).fetchall()
+    coords: dict[str, tuple[float, float]] = {}
+    for row in sources:
+        if row["address"] not in coords:
+            coords[row["address"]] = (row["lat"], row["lng"])
+
+    copied = 0
+    missing = conn.execute(
+        "SELECT id, address FROM stores WHERE lat = 0 AND lng = 0"
+    ).fetchall()
+    for row in missing:
+        pair = coords.get(row["address"])
+        if not pair:
+            continue
+        conn.execute(
+            "UPDATE stores SET lat = ?, lng = ? WHERE id = ?",
+            (pair[0], pair[1], row["id"]),
+        )
+        copied += 1
+    return copied
+
+
+def geocode_missing_stores(conn, sleep_seconds: float | None = None) -> dict:
+    """좌표가 없는 판매점을 주소로 변환해 채운다.
+
+    같은 기본주소는 한 번만 API를 호출하고, 그 좌표를 해당 주소의 모든 매장에 넣는다.
+    """
+    copied = copy_coords_for_same_address(conn)
+
+    rows = conn.execute(
+        "SELECT id, name, address FROM stores WHERE lat = 0 AND lng = 0"
+    ).fetchall()
+
+    by_address: dict[str, list] = {}
+    for row in rows:
+        by_address.setdefault(row["address"], []).append(row)
 
     key = os.environ.get("KAKAO_REST_API_KEY", "").strip()
     delay = sleep_seconds if sleep_seconds is not None else (0.25 if key else 1.1)
@@ -137,20 +175,28 @@ def geocode_missing_stores(conn, sleep_seconds: float | None = None) -> dict:
     filled = 0
     failed: list[str] = []
     source = "kakao" if key else "nominatim"
+    addresses = list(by_address.items())
 
-    for i, row in enumerate(rows, start=1):
-        result = geocode_address(row["address"])
+    for i, (address, group) in enumerate(addresses, start=1):
+        result = geocode_address(address)
         if result:
             conn.execute(
-                "UPDATE stores SET lat = ?, lng = ? WHERE id = ?",
-                (result.lat, result.lng, row["id"]),
+                "UPDATE stores SET lat = ?, lng = ? WHERE address = ? AND lat = 0 AND lng = 0",
+                (result.lat, result.lng, address),
             )
-            filled += 1
+            filled += len(group)
         else:
-            failed.append(f"{row['name']} ({row['address']})")
+            for row in group[:3]:
+                failed.append(f"{row['name']} ({address})")
+            extra = len(group) - min(len(group), 3)
+            if extra > 0:
+                failed.append(f"...같은 주소 매장 {extra}곳 더")
         if i % 50 == 0:
             conn.commit()
-            print(f"geocode progress {i}/{len(rows)} filled={filled} failed={len(failed)}", flush=True)
+            print(
+                f"geocode progress {i}/{len(addresses)} filled={filled} failed={len(failed)}",
+                flush=True,
+            )
         if delay:
             time.sleep(delay)
 
@@ -158,6 +204,8 @@ def geocode_missing_stores(conn, sleep_seconds: float | None = None) -> dict:
         "provider": source,
         "attempted": len(rows),
         "filled": filled,
+        "copied_from_same_address": copied,
+        "unique_addresses": len(addresses),
         "failed": failed[:50],
         "failed_count": len(failed),
     }

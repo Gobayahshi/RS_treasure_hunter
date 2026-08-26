@@ -36,8 +36,10 @@ CREATE TABLE IF NOT EXISTS dealers (
 CREATE TABLE IF NOT EXISTS stores (
     id TEXT PRIMARY KEY,
     dealer_id TEXT REFERENCES dealers(id),
+    store_code TEXT,
     name TEXT NOT NULL,
     address TEXT NOT NULL,
+    detail_address TEXT,
     lat REAL NOT NULL,
     lng REAL NOT NULL,
     created_at TEXT NOT NULL
@@ -135,6 +137,18 @@ def migrate_schema(conn) -> None:
     store_cols = _columns(conn, "stores")
     if store_cols and "dealer_id" not in store_cols:
         conn.execute("ALTER TABLE stores ADD COLUMN dealer_id TEXT")
+    if store_cols and "store_code" not in store_cols:
+        conn.execute("ALTER TABLE stores ADD COLUMN store_code TEXT")
+    if store_cols and "detail_address" not in store_cols:
+        conn.execute("ALTER TABLE stores ADD COLUMN detail_address TEXT")
+
+    # 주소가 같아도 판매점코드가 다르면 다른 매장이다. 기존 DB에도 인덱스를 나중에 만든다.
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_stores_code ON stores(store_code)
+        WHERE store_code IS NOT NULL AND store_code != ''
+        """
+    )
 
     rep_cols = _columns(conn, "reps")
     if rep_cols and "dealer_id" not in rep_cols:

@@ -22,8 +22,10 @@ DEALER_CODE_ALIASES = {"대리점id", "대리점코드", "대리점아이디", "
 DEALER_NAME_ALIASES = {"대리점명", "대리점이름", "소속대리점명", "소속대리점", "dealername", "dealer_name"}
 REP_CODE_ALIASES = {"고유id", "사원고유id", "사원id", "사원코드", "사번", "아이디", "id", "employeecode", "employee_code", "employeeid"}
 REP_NAME_ALIASES = {"이름", "성명", "사원명", "영업사원명", "name"}
+STORE_CODE_ALIASES = {"판매점코드", "매장코드", "점포코드", "storecode", "store_code"}
 STORE_NAME_ALIASES = {"판매점명", "매장명", "점포명", "storename", "store_name"}
 STORE_ADDR_ALIASES = {"기본주소", "주소", "판매점주소", "매장주소", "address"}
+DETAIL_ADDR_ALIASES = {"상세주소", "층호수", "detailaddress", "detail_address"}
 LAT_ALIASES = {"위도", "lat", "latitude"}
 LNG_ALIASES = {"경도", "lng", "lon", "longitude"}
 
@@ -113,8 +115,9 @@ def guess_kind(filename: str, sheet_name: str, headers: set[str]) -> str | None:
     has_dealer_code = bool(headers & DEALER_CODE_ALIASES)
     has_dealer_name = bool(headers & DEALER_NAME_ALIASES)
     has_store_name = bool(headers & STORE_NAME_ALIASES)
+    has_store_code = bool(headers & STORE_CODE_ALIASES)
 
-    if has_addr or (has_store_name and not has_rep):
+    if has_store_code or has_addr or (has_store_name and not has_rep):
         return "stores"
     if has_rep:
         return "reps"
@@ -165,7 +168,7 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
     summary = {
         "dealers": {"created": 0, "updated": 0, "skipped": 0, "errors": []},
         "reps": {"created": 0, "updated": 0, "skipped": 0, "errors": []},
-        "stores": {"created": 0, "updated": 0, "skipped": 0, "duplicates_collapsed": 0, "errors": []},
+        "stores": {"created": 0, "updated": 0, "skipped": 0, "duplicate_codes": 0, "errors": []},
         "unknown_sheets": buckets.get("_unknown", []),
     }
 
@@ -225,23 +228,28 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
             )
             summary["reps"]["created"] += 1
 
-    seen_addresses: set[str] = set()
+    seen_codes: set[str] = set()
     for i, row in enumerate(buckets.get("stores", []), start=2):
-        # 층/호수(상세주소)는 쓰지 않는다. 기본주소만 GPS 기준점이다.
+        store_code = pick(row, STORE_CODE_ALIASES)
         address = pick(row, {"기본주소"}) or pick(row, STORE_ADDR_ALIASES)
+        detail_address = pick(row, DETAIL_ADDR_ALIASES)
         name = pick(row, STORE_NAME_ALIASES) or address
         dealer_code = pick(row, DEALER_CODE_ALIASES)
         dealer_name = pick(row, DEALER_NAME_ALIASES)
         lat_raw = pick(row, LAT_ALIASES)
         lng_raw = pick(row, LNG_ALIASES)
+        if not store_code:
+            summary["stores"]["skipped"] += 1
+            summary["stores"]["errors"].append(f"판매점 {i}행: 판매점코드 필요")
+            continue
         if not address:
             summary["stores"]["skipped"] += 1
-            summary["stores"]["errors"].append(f"판매점 {i}행: 기본주소 필요")
+            summary["stores"]["errors"].append(f"판매점 {store_code}: 기본주소 필요")
             continue
-        if address in seen_addresses:
-            summary["stores"]["duplicates_collapsed"] += 1
+        if store_code in seen_codes:
+            summary["stores"]["duplicate_codes"] += 1
             continue
-        seen_addresses.add(address)
+        seen_codes.add(store_code)
 
         dealer = _find_dealer(conn, dealer_code, dealer_name) if (dealer_code or dealer_name) else None
         try:
@@ -249,23 +257,68 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
             lng = float(lng_raw) if lng_raw else 0.0
         except ValueError:
             summary["stores"]["skipped"] += 1
-            summary["stores"]["errors"].append(f"판매점 {address}: 위도/경도 숫자 형식 오류")
+            summary["stores"]["errors"].append(f"판매점 {store_code}: 위도/경도 숫자 형식 오류")
             continue
 
-        existing = conn.execute("SELECT * FROM stores WHERE address = ?", (address,)).fetchone()
+        dealer_id = dealer["id"] if dealer else None
+        existing = conn.execute("SELECT * FROM stores WHERE store_code = ?", (store_code,)).fetchone()
+        if not existing:
+            # 예전에 주소로 한 곳으로 합쳐 둔 행이 있으면, 그중 하나에 이 코드를 붙인다.
+            existing = conn.execute(
+                """
+                SELECT * FROM stores
+                WHERE address = ? AND (store_code IS NULL OR store_code = '')
+                LIMIT 1
+                """,
+                (address,),
+            ).fetchone()
+
         if existing:
-            if lat != 0 or lng != 0:
-                conn.execute(
-                    "UPDATE stores SET lat = ?, lng = ? WHERE id = ?",
-                    (lat, lng, existing["id"]),
-                )
+            if lat == 0 and lng == 0:
+                lat, lng = existing["lat"], existing["lng"]
+            conn.execute(
+                """
+                UPDATE stores
+                SET store_code = ?, name = ?, address = ?, detail_address = ?,
+                    dealer_id = COALESCE(?, dealer_id), lat = ?, lng = ?
+                WHERE id = ?
+                """,
+                (
+                    store_code,
+                    name,
+                    address,
+                    detail_address,
+                    dealer_id,
+                    lat,
+                    lng,
+                    existing["id"],
+                ),
+            )
             summary["stores"]["updated"] += 1
         else:
             conn.execute(
-                "INSERT INTO stores (id, dealer_id, name, address, lat, lng, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (new_id(), dealer["id"] if dealer else None, name, address, lat, lng, now_iso),
+                """
+                INSERT INTO stores (
+                    id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_id(),
+                    dealer_id,
+                    store_code,
+                    name,
+                    address,
+                    detail_address,
+                    lat,
+                    lng,
+                    now_iso,
+                ),
             )
             summary["stores"]["created"] += 1
+
+    from geocode import copy_coords_for_same_address
+
+    copy_coords_for_same_address(conn)
 
     return summary
 
@@ -291,10 +344,11 @@ def build_template_xlsx() -> bytes:
         ),
         (
             "판매점",
-            ["판매점명", "주소", "소속대리점ID"],
+            ["판매점코드", "판매점명", "기본주소", "상세주소", "소속대리점ID"],
             [
-                ["테스트매장A", "서울특별시 중구 세종대로 110", "DEAL001"],
-                ["테스트매장B", "경기도 성남시 분당구 정자일로 95", "DEAL002"],
+                ["PC9452", "테스트매장A", "서울특별시 중구 세종대로 110", "1층 101호", "DEAL001"],
+                ["PE0840", "테스트매장B", "서울특별시 중구 세종대로 110", "1층 102호", "DEAL001"],
+                ["P81790", "테스트매장C", "경기도 성남시 분당구 정자일로 95", "2층", "DEAL002"],
             ],
             36,
         ),
@@ -324,10 +378,12 @@ def build_template_xlsx() -> bytes:
         "1) 노란 행은 예시입니다. 지우고 실제 데이터를 넣으세요.",
         "2) 반드시 대리점 → 영업사원/판매점 순으로 연결됩니다. 소속대리점ID는 대리점 시트의 대리점ID와 같아야 합니다.",
         "3) 파일 3개로 나눠 올려도 되고, 이 엑셀 1개(시트 3개)로 올려도 됩니다.",
-        "4) 판매점은 기본주소만 사용합니다. 층/호수(상세주소)는 무시하고, 같은 기본주소는 한 곳으로 합칩니다.",
-        "5) 판매점과 영업사원을 매칭하지 않습니다. 보물은 팀 전체가 볼 수 있습니다.",
-        "5) 같은 대리점ID/고유ID/판매점명+주소는 다시 올리면 수정(업데이트)됩니다.",
-        "6) .xlsx 형식만 지원합니다. 구형 .xls 는 엑셀에서 .xlsx 로 저장한 뒤 올려주세요.",
+        "4) 판매점코드가 매장 고유키입니다. 주소가 같아도 코드가 다르면 다른 매장으로 등록합니다.",
+        "5) GPS는 기본주소를 쓰고, 상세주소(층/호수)는 화면에 표시합니다.",
+        "6) 보물찾기는 기본주소가 같으면 한 곳으로 봅니다. 판매점코드는 재고 구분용입니다.",
+        "7) 판매점과 영업사원을 매칭하지 않습니다. 보물은 팀 전체가 볼 수 있습니다.",
+        "8) 같은 대리점ID/고유ID/판매점코드는 다시 올리면 수정(업데이트)됩니다.",
+        "9) .xlsx 형식만 지원합니다. 구형 .xls 는 엑셀에서 .xlsx 로 저장한 뒤 올려주세요.",
     ]
     for i, line in enumerate(lines, start=3):
         note[f"A{i}"] = line

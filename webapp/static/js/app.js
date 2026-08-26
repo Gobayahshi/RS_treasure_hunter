@@ -44,6 +44,15 @@ function getOrCreateDeviceId() {
   return id;
 }
 
+function treasurePlaceName(store) {
+  return store.address || store.name;
+}
+
+function treasurePlaceSub(store) {
+  const n = Number(store.store_count) || 0;
+  return n > 1 ? `이 주소 매장 ${n}곳` : "";
+}
+
 function haversineDistanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = (deg) => (deg * Math.PI) / 180;
@@ -255,8 +264,8 @@ function renderTreasureMap(treasures, options = {}) {
     marker.bindPopup(
       `<div class="map-popup">
         <strong>${tierLabel}</strong>
-        <div class="store-name">${t.store.name}</div>
-        <div class="muted small">${t.store.address}</div>
+        <div class="store-name">${treasurePlaceName(t.store)}</div>
+        ${treasurePlaceSub(t.store) ? `<div class="muted small">${treasurePlaceSub(t.store)}</div>` : ""}
         <div class="distance">내 위치에서 ${Math.round(t.distanceMeters)}m</div>
         ${actionHtml}
       </div>`
@@ -376,8 +385,8 @@ function renderTreasureList(treasures, totalInRadius, radiusKm = NEARBY_RADIUS_K
         <span class="tier-badge">${t.tier === "rare" ? "⭐ 레어" : "🏅 일반"}</span>
         <span class="distance">${Math.round(t.distanceMeters)}m</span>
       </div>
-      <div class="store-name">${t.store.name}</div>
-      <div class="store-address">${t.store.address}</div>
+      <div class="store-name">${treasurePlaceName(t.store)}</div>
+      ${treasurePlaceSub(t.store) ? `<div class="store-address">${treasurePlaceSub(t.store)}</div>` : ""}
       <button class="visit-button" ${withinRadius ? "" : "disabled"}>
         ${withinRadius ? "보물 캐러가기" : "매장 근처로 이동하세요"}
       </button>
@@ -394,7 +403,7 @@ function renderTreasureList(treasures, totalInRadius, radiusKm = NEARBY_RADIUS_K
 // ---------------------------------------------------------------------------
 async function startVisit(store) {
   showScreen("visit");
-  $("visitStoreName").textContent = store.name;
+  $("visitStoreName").textContent = treasurePlaceName(store);
   $("visitResult").classList.add("hidden");
   $("visitProgressFill").parentElement.classList.remove("hidden");
   $("visitProgressText").classList.remove("hidden");
@@ -505,9 +514,47 @@ function renderVisitResult(result) {
 // ---------------------------------------------------------------------------
 // 포인트 / 리워드
 // ---------------------------------------------------------------------------
+function rankMedal(rank) {
+  return { 1: "🥇", 2: "🥈", 3: "🥉" }[rank] || `${rank}.`;
+}
+
+function renderRankList(containerId, rows, emptyText, lineFn) {
+  const container = $(containerId);
+  container.innerHTML = "";
+  if (!rows.length) {
+    container.innerHTML = `<p class="empty rank-empty">${emptyText}</p>`;
+    return;
+  }
+  for (const row of rows) {
+    const el = document.createElement("div");
+    el.className = "rank-row" + (row.is_me ? " rank-me" : "");
+    el.innerHTML = lineFn(row);
+    container.appendChild(el);
+  }
+}
+
+async function loadRankings() {
+  const data = await api(`/stats/rankings?rep_id=${encodeURIComponent(rep.id)}`);
+  renderRankList(
+    "dealerRankList",
+    data.dealers || [],
+    "아직 포인트가 쌓인 대리점이 없습니다.",
+    (row) =>
+      `<span>${rankMedal(row.rank)} ${row.name}</span><span class="ledger-points">${row.total_points}P</span>`
+  );
+  renderRankList(
+    "repRankList",
+    data.reps || [],
+    "아직 포인트를 받은 영업사원이 없습니다.",
+    (row) =>
+      `<span>${rankMedal(row.rank)} ${row.dealer_name} · ${row.name_masked}${row.is_me ? " (나)" : ""}</span><span class="ledger-points">${row.total_points}P</span>`
+  );
+}
+
 async function loadRewardsScreen() {
   const data = await api(`/points/${rep.id}`);
   $("totalPoints").textContent = `${data.total}P`;
+  await loadRankings();
 
   const container = $("ledgerList");
   container.innerHTML = "";

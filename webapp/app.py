@@ -77,6 +77,18 @@ def row_to_dict(row) -> dict:
     return dict(row) if row is not None else None
 
 
+def mask_person_name(name: str) -> str:
+    """영업사원 랭킹용. 성과는 보여 주되 실명은 가린다. 예: 홍길동 → 홍*동, 고바야시 → 고**시"""
+    text = (name or "").strip()
+    if not text:
+        return "익명"
+    if len(text) == 1:
+        return "*"
+    if len(text) == 2:
+        return text[0] + "*"
+    return text[0] + ("*" * (len(text) - 2)) + text[-1]
+
+
 def public_rep(row) -> dict:
     """API 응답용. 비밀번호 해시는 절대 내려보내지 않는다."""
     data = row_to_dict(row)
@@ -360,9 +372,17 @@ def create_store():
         lng = float(body["lng"])
     except (KeyError, TypeError, ValueError):
         return jsonify({"error": "name, address, lat, lng required"}), 400
+    store_code = (body.get("store_code") or "").strip()
+    detail_address = (body.get("detail_address") or "").strip()
+    if not store_code:
+        return jsonify({"error": "store_code required", "message": "판매점코드가 필요합니다."}), 400
     dealer_code = (body.get("dealer_code") or "").strip()
 
     with db_session() as conn:
+        existing = conn.execute("SELECT id FROM stores WHERE store_code = ?", (store_code,)).fetchone()
+        if existing:
+            return jsonify({"error": "STORE_CODE_EXISTS", "message": "이미 있는 판매점코드입니다."}), 409
+
         dealer_id = None
         if dealer_code:
             dealer = conn.execute("SELECT * FROM dealers WHERE dealer_code = ?", (dealer_code,)).fetchone()
@@ -372,8 +392,12 @@ def create_store():
 
         store_id = new_id()
         conn.execute(
-            "INSERT INTO stores (id, dealer_id, name, address, lat, lng, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (store_id, dealer_id, name, address, lat, lng, now_iso()),
+            """
+            INSERT INTO stores (
+                id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (store_id, dealer_id, store_code, name, address, detail_address, lat, lng, now_iso()),
         )
         store = conn.execute(
             """
@@ -394,15 +418,40 @@ def _treasure_rows_to_json(rows) -> list[dict]:
     result = []
     for r in rows:
         d = row_to_dict(r)
+        address = d.pop("store_address")
+        d.pop("store_code", None)
+        d.pop("store_detail_address", None)
+        store_count = d.pop("store_count", None) or 1
         d["store"] = {
             "id": d["store_id"],
             "name": d.pop("store_name"),
-            "address": d.pop("store_address"),
+            "address": address,
             "lat": d.pop("store_lat"),
             "lng": d.pop("store_lng"),
+            "store_count": int(store_count),
         }
         result.append(d)
     return result
+
+
+TREASURE_STORE_SELECT = """
+            SELECT t.*, s.name as store_name, s.address as store_address,
+                   s.lat as store_lat, s.lng as store_lng,
+                   (SELECT COUNT(*) FROM stores sx WHERE sx.address = s.address) as store_count
+            FROM treasures t
+            JOIN stores s ON s.id = t.store_id
+"""
+
+
+def _one_treasure_per_address(items: list[dict]) -> list[dict]:
+    """보물찾기는 기본주소가 같으면 한 곳이다. 판매점코드는 쓰지 않는다."""
+    by_address: dict[str, dict] = {}
+    for item in items:
+        address = (item.get("store") or {}).get("address") or ""
+        if address in by_address:
+            continue
+        by_address[address] = item
+    return list(by_address.values())
 
 
 @app.route("/api/treasures/nearby")
@@ -426,11 +475,8 @@ def nearby_treasures():
 
     with db_session() as conn:
         rows = conn.execute(
-            """
-            SELECT t.*, s.name as store_name, s.address as store_address,
-                   s.lat as store_lat, s.lng as store_lng
-            FROM treasures t
-            JOIN stores s ON s.id = t.store_id
+            TREASURE_STORE_SELECT
+            + """
             WHERE t.claimed_at IS NULL
               AND s.lat BETWEEN ? AND ?
               AND s.lng BETWEEN ? AND ?
@@ -445,6 +491,7 @@ def nearby_treasures():
         )
     items = [i for i in items if i["distance_meters"] <= radius_km * 1000]
     items.sort(key=lambda i: i["distance_meters"])
+    items = _one_treasure_per_address(items)
     return jsonify({"total_in_radius": len(items), "items": items[:limit]})
 
 
@@ -454,34 +501,38 @@ def active_treasures():
     limit = min(int(request.args.get("limit", 500) or 500), 2000)
     with db_session() as conn:
         rows = conn.execute(
-            """
-            SELECT t.*, s.name as store_name, s.address as store_address,
-                   s.lat as store_lat, s.lng as store_lng
-            FROM treasures t
-            JOIN stores s ON s.id = t.store_id
+            TREASURE_STORE_SELECT
+            + """
             WHERE t.claimed_at IS NULL
               AND (s.lat != 0 OR s.lng != 0)
-            LIMIT ?
             """,
-            (limit,),
         ).fetchall()
-        return jsonify(_treasure_rows_to_json(rows))
+        items = _one_treasure_per_address(_treasure_rows_to_json(rows))
+        return jsonify(items[:limit])
 
 
 @app.route("/api/treasures/spawn", methods=["POST"])
 def spawn_treasures():
-    """보물이 없는 매장에 새 보물을 스폰한다. 오래 미방문한 매장일수록 rare 등급."""
+    """보물이 없는 주소에 새 보물을 스폰한다. 같은 기본주소는 한 곳이다."""
     RARE_THRESHOLD_DAYS = 14
     with db_session() as conn:
-        # 매장 수천 건을 한 번에 처리하므로 매장별 재조회(N+1) 대신 마지막 방문일을 한 번에 집계한다.
         rows = conn.execute(
             """
-            SELECT s.id, s.lat, s.lng, MAX(vs.started_at) AS last_visit
+            SELECT s.address,
+                   MIN(s.id) AS id,
+                   MAX(s.lat) AS lat,
+                   MAX(s.lng) AS lng,
+                   MAX(vs.started_at) AS last_visit
             FROM stores s
             LEFT JOIN visit_sessions vs ON vs.store_id = s.id
-            WHERE s.id NOT IN (SELECT store_id FROM treasures WHERE claimed_at IS NULL)
-              AND (s.lat != 0 OR s.lng != 0)
-            GROUP BY s.id
+            WHERE (s.lat != 0 OR s.lng != 0)
+              AND s.address NOT IN (
+                  SELECT s2.address
+                  FROM treasures t
+                  JOIN stores s2 ON s2.id = t.store_id
+                  WHERE t.claimed_at IS NULL
+              )
+            GROUP BY s.address
             """
         ).fetchall()
 
@@ -634,9 +685,10 @@ def complete_visit_session(session_id):
             """
             SELECT COUNT(*) as cnt FROM point_ledger pl
             JOIN visit_sessions vs ON vs.id = pl.session_id
-            WHERE pl.rep_id = ? AND vs.store_id = ? AND pl.created_at >= ?
+            JOIN stores s ON s.id = vs.store_id
+            WHERE pl.rep_id = ? AND s.address = ? AND pl.created_at >= ?
             """,
-            (session["rep_id"], session["store_id"], start_of_day),
+            (session["rep_id"], store["address"], start_of_day),
         ).fetchone()["cnt"]
 
         device_mismatch = bool(
@@ -667,10 +719,15 @@ def complete_visit_session(session_id):
         claimed_treasure = None
 
         if evaluation.status == "auto_approved" and evaluation.points_eligible:
-            treasure = conn.execute(
-                "SELECT * FROM treasures WHERE store_id = ? AND claimed_at IS NULL LIMIT 1",
-                (session["store_id"],),
-            ).fetchone()
+            treasures = conn.execute(
+                """
+                SELECT t.* FROM treasures t
+                JOIN stores s ON s.id = t.store_id
+                WHERE s.address = ? AND t.claimed_at IS NULL
+                """,
+                (store["address"],),
+            ).fetchall()
+            treasure = treasures[0] if treasures else None
 
             points = points_for_tier(treasure["tier"]) if treasure else points_for_tier("normal")
 
@@ -680,16 +737,22 @@ def complete_visit_session(session_id):
                 INSERT INTO point_ledger (id, rep_id, session_id, points, reason, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (ledger_id, session["rep_id"], session_id, points, f"VISIT_VERIFIED:{session['store_id']}", now_iso()),
+                (ledger_id, session["rep_id"], session_id, points, f"VISIT_VERIFIED:{store['address']}", now_iso()),
             )
             point_ledger_entry = row_to_dict(
                 conn.execute("SELECT * FROM point_ledger WHERE id = ?", (ledger_id,)).fetchone()
             )
 
-            if treasure:
+            if treasures:
                 conn.execute(
-                    "UPDATE treasures SET claimed_at = ?, claimed_session_id = ? WHERE id = ?",
-                    (now_iso(), session_id, treasure["id"]),
+                    """
+                    UPDATE treasures
+                    SET claimed_at = ?, claimed_session_id = ?
+                    WHERE claimed_at IS NULL AND store_id IN (
+                        SELECT id FROM stores WHERE address = ?
+                    )
+                    """,
+                    (now_iso(), session_id, store["address"]),
                 )
                 claimed_treasure = row_to_dict(
                     conn.execute("SELECT * FROM treasures WHERE id = ?", (treasure["id"],)).fetchone()
@@ -744,6 +807,55 @@ def leaderboard():
             """
         ).fetchall()
         return jsonify([row_to_dict(r) for r in rows])
+
+
+@app.route("/api/stats/rankings")
+def public_rankings():
+    """영업사원 화면용. 대리점/사원 상위 10. 사원 이름은 마스킹한다."""
+    me_id = (request.args.get("rep_id") or "").strip()
+    with db_session() as conn:
+        dealer_rows = conn.execute(
+            """
+            SELECT d.name as dealer_name, COALESCE(SUM(pl.points), 0) as total_points
+            FROM dealers d
+            LEFT JOIN reps r ON r.dealer_id = d.id
+            LEFT JOIN point_ledger pl ON pl.rep_id = r.id
+            GROUP BY d.id
+            HAVING total_points > 0
+            ORDER BY total_points DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        rep_rows = conn.execute(
+            """
+            SELECT r.id as rep_id, r.name, d.name as dealer_name,
+                   COALESCE(SUM(pl.points), 0) as total_points
+            FROM reps r
+            LEFT JOIN dealers d ON d.id = r.dealer_id
+            LEFT JOIN point_ledger pl ON pl.rep_id = r.id
+            GROUP BY r.id
+            HAVING total_points > 0
+            ORDER BY total_points DESC
+            LIMIT 10
+            """
+        ).fetchall()
+
+    dealers = [
+        {"rank": i + 1, "name": row["dealer_name"], "total_points": row["total_points"]}
+        for i, row in enumerate(dealer_rows)
+    ]
+    reps = []
+    for i, row in enumerate(rep_rows):
+        reps.append(
+            {
+                "rank": i + 1,
+                "name_masked": mask_person_name(row["name"]),
+                "dealer_name": row["dealer_name"] or "소속 없음",
+                "total_points": row["total_points"],
+                "is_me": bool(me_id) and row["rep_id"] == me_id,
+            }
+        )
+    return jsonify({"dealers": dealers, "reps": reps})
 
 
 # ---------------------------------------------------------------------------

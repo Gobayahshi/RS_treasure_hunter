@@ -18,7 +18,7 @@
     <h2>엑셀 마스터 업로드</h2>
     <div class="card">
       <p class="muted small">
-        판매점 엑셀에는 주소만 있으면 됩니다. 올리면 주소로 GPS 좌표를 자동 변환합니다.
+        판매점코드가 있으면 주소가 같아도 매장을 따로 등록합니다. 기본주소로 GPS를 잡고, 상세주소는 표시용입니다.
       </p>
       <a class="btn-secondary" href="api/import/template">양식 다운로드</a>
       <input id="excelFiles" type="file" accept=".xlsx" multiple />
@@ -31,8 +31,10 @@
   <section class="screen">
     <h2>판매점 빠른 등록 (GPS 테스트용)</h2>
     <div class="card">
+      <input id="storeCode" type="text" placeholder="판매점코드" />
       <input id="storeName" type="text" placeholder="판매점명" />
-      <input id="storeAddress" type="text" placeholder="주소" />
+      <input id="storeAddress" type="text" placeholder="기본주소" />
+      <input id="storeDetailAddress" type="text" placeholder="상세주소 (층/호수, 선택)" />
       <input id="storeDealerCode" type="text" placeholder="소속대리점ID (선택)" />
       <div class="row">
         <input id="storeLat" type="number" step="0.000001" placeholder="위도(lat)" />

@@ -355,9 +355,28 @@ button {
 .rank-row {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   background: #fff;
   padding: 12px 16px;
   border-radius: 8px;
+}
+
+.rank-row span:first-child {
+  min-width: 0;
+  word-break: keep-all;
+}
+
+.rank-me {
+  outline: 2px solid #2563eb;
+  background: #eff6ff;
+}
+
+.rank-note {
+  margin: -4px 0 10px;
+}
+
+.rank-empty {
+  margin-top: 8px;
 }
 
 .import-result {

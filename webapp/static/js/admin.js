@@ -74,8 +74,8 @@ async function loadStores() {
       ? `lat: ${s.lat}, lng: ${s.lng}`
       : "좌표 없음 — 주소 변환 필요";
     el.innerHTML = `
-      <div class="store-name">${s.name}</div>
-      <div class="store-address">${s.address}</div>
+      <div class="store-name">${s.name}${s.store_code ? ` <span class="muted">(${s.store_code})</span>` : ""}</div>
+      <div class="store-address">${[s.address, s.detail_address].filter(Boolean).join(" ")}</div>
       <div class="muted small">${s.dealer_name || "소속대리점 없음"} (${s.dealer_code || "-"}) · ${coordText}</div>
     `;
     container.appendChild(el);
@@ -129,25 +129,37 @@ async function reloadAll() {
 
 async function handleAddStore() {
   const name = $("storeName").value.trim();
+  const storeCode = $("storeCode").value.trim();
   const address = $("storeAddress").value.trim();
+  const detailAddress = $("storeDetailAddress").value.trim();
   const dealerCode = $("storeDealerCode").value.trim();
   const lat = parseFloat($("storeLat").value);
   const lng = parseFloat($("storeLng").value);
   const msg = $("storeMessage");
 
-  if (!name || !address || Number.isNaN(lat) || Number.isNaN(lng)) {
-    msg.textContent = "판매점명, 주소, 위도, 경도를 입력해주세요.";
+  if (!storeCode || !name || !address || Number.isNaN(lat) || Number.isNaN(lng)) {
+    msg.textContent = "판매점코드, 판매점명, 기본주소, 위도, 경도를 입력해주세요.";
     return;
   }
 
   try {
     await api("/stores", {
       method: "POST",
-      body: JSON.stringify({ name, address, lat, lng, dealer_code: dealerCode || undefined }),
+      body: JSON.stringify({
+        store_code: storeCode,
+        name,
+        address,
+        detail_address: detailAddress || undefined,
+        lat,
+        lng,
+        dealer_code: dealerCode || undefined,
+      }),
     });
     msg.textContent = "등록되었습니다.";
+    $("storeCode").value = "";
     $("storeName").value = "";
     $("storeAddress").value = "";
+    $("storeDetailAddress").value = "";
     $("storeDealerCode").value = "";
     $("storeLat").value = "";
     $("storeLng").value = "";
@@ -193,7 +205,7 @@ async function handleSpawn() {
   msg.textContent = "실행 중...";
   try {
     const result = await api("/treasures/spawn", { method: "POST" });
-    msg.textContent = `${result.spawned}개 매장에 새 보물을 스폰했습니다. (좌표 없는 매장은 제외)`;
+    msg.textContent = `${result.spawned}개 주소에 새 보물을 스폰했습니다. (같은 주소는 한 곳, 좌표 없는 매장은 제외)`;
   } catch (err) {
     msg.textContent = String(err);
   }
@@ -204,7 +216,7 @@ function formatImportSummary(summary) {
   for (const key of ["dealers", "reps", "stores"]) {
     const label = { dealers: "대리점", reps: "영업사원", stores: "판매점" }[key];
     const s = summary[key];
-    lines.push(`${label}: 신규 ${s.created} / 수정 ${s.updated} / 건너뜀 ${s.skipped}${s.duplicates_collapsed ? ` / 중복주소 합침 ${s.duplicates_collapsed}` : ""}`);
+    lines.push(`${label}: 신규 ${s.created} / 수정 ${s.updated} / 건너뜀 ${s.skipped}${s.duplicate_codes ? ` / 중복코드 ${s.duplicate_codes}` : ""}`);
     (s.errors || []).slice(0, 20).forEach((e) => lines.push(`  - ${e}`));
     if ((s.errors || []).length > 20) lines.push(`  - ...외 ${s.errors.length - 20}건`);
   }
