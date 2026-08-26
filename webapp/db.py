@@ -63,7 +63,26 @@ CREATE TABLE IF NOT EXISTS treasures (
     lng REAL NOT NULL,
     active_date TEXT NOT NULL,
     claimed_at TEXT,
-    claimed_session_id TEXT
+    claimed_session_id TEXT,
+    points INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS admins (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    admin_id TEXT NOT NULL REFERENCES admins(id),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS visit_sessions (
@@ -168,6 +187,49 @@ def migrate_schema(conn) -> None:
 
     # 테스트 계정 1107711(고바야시)은 소속 대리점 없음
     conn.execute("UPDATE reps SET dealer_id = NULL WHERE employee_code = '1107711'")
+
+    treasure_cols = _columns(conn, "treasures")
+    if treasure_cols and "points" not in treasure_cols:
+        conn.execute("ALTER TABLE treasures ADD COLUMN points INTEGER")
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS admins (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS admin_sessions (
+            token TEXT PRIMARY KEY,
+            admin_id TEXT NOT NULL REFERENCES admins(id),
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('points_normal', '10')")
+    conn.execute("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('points_rare', '30')")
+
+    # 최초 1회만 기본 관리자를 만든다. 이미 있으면 비밀번호를 덮어쓰지 않는다.
+    admin_username = (os.environ.get("ADMIN_USERNAME") or "admin").strip() or "admin"
+    admin_password = os.environ.get("ADMIN_INITIAL_PASSWORD") or "TreasureAdmin2026"
+    existing_admin = conn.execute("SELECT id FROM admins WHERE username = ?", (admin_username,)).fetchone()
+    if not existing_admin:
+        from datetime import datetime
+
+        conn.execute(
+            "INSERT INTO admins (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+            (
+                "admin-default",
+                admin_username,
+                generate_password_hash(admin_password),
+                datetime.utcnow().isoformat(),
+            ),
+        )
 
 
 def init_db() -> None:

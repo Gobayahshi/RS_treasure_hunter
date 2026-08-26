@@ -2,12 +2,14 @@ import json
 import math
 import os
 import re
+import secrets
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory, Response
+from flask import Flask, Response, g, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from confidence import (
@@ -16,10 +18,9 @@ from confidence import (
     RULES_CONFIG,
     evaluate_visit_session,
     haversine_distance_meters,
-    points_for_tier,
 )
 from db import db_session, init_db
-from excel_import import build_template_xlsx, parse_uploads, upsert_masters
+from excel_import import build_stats_xlsx, build_template_xlsx, parse_uploads, upsert_masters
 from geocode import geocode_missing_stores
 
 # Playground는 CONTEXT_PATH=/rs-treasure 로 붙인다. 로컬은 빈 값.
@@ -105,6 +106,77 @@ def hash_password(plain: str) -> str:
 def default_password_for(employee_code: str) -> str:
     """초기 비밀번호는 고유ID와 동일."""
     return employee_code
+
+
+ADMIN_SESSION_DAYS = 7
+
+
+def _point_defaults(conn) -> dict[str, int]:
+    defaults = {"normal": 10, "rare": 30}
+    rows = conn.execute(
+        "SELECT key, value FROM app_settings WHERE key IN ('points_normal', 'points_rare')"
+    ).fetchall()
+    for row in rows:
+        try:
+            value = int(row["value"])
+        except (TypeError, ValueError):
+            continue
+        if row["key"] == "points_normal":
+            defaults["normal"] = value
+        elif row["key"] == "points_rare":
+            defaults["rare"] = value
+    return defaults
+
+
+def _award_points_for(treasure, defaults: dict[str, int]) -> int:
+    if treasure is None:
+        return defaults["normal"]
+    raw = treasure["points"] if "points" in treasure.keys() else None
+    if raw is not None:
+        return int(raw)
+    return defaults.get(treasure["tier"] or "normal", defaults["normal"])
+
+
+def _admin_from_token(conn, token: str):
+    if not token:
+        return None
+    row = conn.execute(
+        """
+        SELECT a.id, a.username, s.created_at AS session_created_at
+        FROM admin_sessions s
+        JOIN admins a ON a.id = s.admin_id
+        WHERE s.token = ?
+        """,
+        (token,),
+    ).fetchone()
+    if not row:
+        return None
+    created = parse_iso(row["session_created_at"])
+    if datetime.utcnow() - created > timedelta(days=ADMIN_SESSION_DAYS):
+        conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
+        return None
+    return {"id": row["id"], "username": row["username"]}
+
+
+def _admin_auth_error():
+    token = (request.headers.get("X-Admin-Token") or "").strip()
+    with db_session() as conn:
+        admin = _admin_from_token(conn, token)
+    if not admin:
+        return jsonify({"error": "ADMIN_AUTH_REQUIRED", "message": "관리자 로그인이 필요합니다."}), 401
+    g.admin = admin
+    return None
+
+
+def require_admin(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        err = _admin_auth_error()
+        if err is not None:
+            return err
+        return fn(*args, **kwargs)
+
+    return wrapped
 
 
 def _read_geocode_status_from_log() -> dict:
@@ -257,11 +329,244 @@ def change_password():
 
 
 # ---------------------------------------------------------------------------
+# 관리자 로그인
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    body = request.get_json(force=True)
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    if not username or not password:
+        return jsonify({"error": "username, password required", "message": "아이디와 비밀번호를 입력해주세요."}), 400
+
+    with db_session() as conn:
+        admin = conn.execute("SELECT * FROM admins WHERE username = ?", (username,)).fetchone()
+        if not admin or not check_password_hash(admin["password_hash"], password):
+            return jsonify({"error": "INVALID_ADMIN", "message": "관리자 아이디 또는 비밀번호가 올바르지 않습니다."}), 401
+
+        cutoff = (datetime.utcnow() - timedelta(days=ADMIN_SESSION_DAYS)).isoformat()
+        conn.execute("DELETE FROM admin_sessions WHERE created_at < ?", (cutoff,))
+        token = secrets.token_urlsafe(32)
+        conn.execute(
+            "INSERT INTO admin_sessions (token, admin_id, created_at) VALUES (?, ?, ?)",
+            (token, admin["id"], now_iso()),
+        )
+        return jsonify({"token": token, "username": admin["username"]})
+
+
+@app.route("/api/admin/logout", methods=["POST"])
+@require_admin
+def admin_logout():
+    token = (request.headers.get("X-Admin-Token") or "").strip()
+    with db_session() as conn:
+        conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/me")
+@require_admin
+def admin_me():
+    return jsonify({"username": g.admin["username"]})
+
+
+@app.route("/api/admin/change-password", methods=["POST"])
+@require_admin
+def admin_change_password():
+    body = request.get_json(force=True)
+    current_password = body.get("current_password") or ""
+    new_password = body.get("new_password") or ""
+    if not current_password or not new_password:
+        return jsonify({"error": "current_password, new_password required"}), 400
+    if len(new_password) < 4:
+        return jsonify({"error": "PASSWORD_TOO_SHORT", "message": "새 비밀번호는 4자 이상이어야 합니다."}), 400
+
+    with db_session() as conn:
+        admin = conn.execute("SELECT * FROM admins WHERE id = ?", (g.admin["id"],)).fetchone()
+        if not admin or not check_password_hash(admin["password_hash"], current_password):
+            return jsonify({"error": "INVALID_PASSWORD", "message": "현재 비밀번호가 올바르지 않습니다."}), 401
+        conn.execute(
+            "UPDATE admins SET password_hash = ? WHERE id = ?",
+            (hash_password(new_password), admin["id"]),
+        )
+        return jsonify({"ok": True, "message": "비밀번호가 변경되었습니다."})
+
+
+@app.route("/api/admin/settings", methods=["GET", "POST"])
+@require_admin
+def admin_settings():
+    with db_session() as conn:
+        if request.method == "GET":
+            defaults = _point_defaults(conn)
+            return jsonify({"points_normal": defaults["normal"], "points_rare": defaults["rare"]})
+
+        body = request.get_json(force=True) or {}
+        try:
+            points_normal = int(body.get("points_normal"))
+            points_rare = int(body.get("points_rare"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "points_normal, points_rare required"}), 400
+        if points_normal < 1 or points_rare < 1 or points_normal > 100000 or points_rare > 100000:
+            return jsonify({"error": "INVALID_POINTS", "message": "포인트는 1~100000 사이여야 합니다."}), 400
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('points_normal', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(points_normal),),
+        )
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('points_rare', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(points_rare),),
+        )
+        return jsonify({"points_normal": points_normal, "points_rare": points_rare})
+
+
+@app.route("/api/admin/treasures")
+@require_admin
+def list_admin_treasures():
+    with db_session() as conn:
+        defaults = _point_defaults(conn)
+        rows = conn.execute(
+            """
+            SELECT t.*, s.name AS store_name, s.address AS store_address,
+                   s.store_code, s.lat AS store_lat, s.lng AS store_lng
+            FROM treasures t
+            JOIN stores s ON s.id = t.store_id
+            WHERE s.store_code LIKE 'ADMIN-%'
+            ORDER BY t.active_date DESC
+            LIMIT 200
+            """
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = row_to_dict(row)
+            item["award_points"] = _award_points_for(row, defaults)
+            items.append(item)
+        return jsonify(items)
+
+
+@app.route("/api/admin/treasures/plant", methods=["POST"])
+@require_admin
+def plant_treasure():
+    body = request.get_json(force=True) or {}
+    name = (body.get("name") or "").strip() or "관리자 지정 보물"
+    try:
+        lat = float(body["lat"])
+        lng = float(body["lng"])
+        points = int(body["points"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "lat, lng, points required", "message": "위치와 포인트를 입력해주세요."}), 400
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return jsonify({"error": "INVALID_COORDS", "message": "위도/경도가 올바르지 않습니다."}), 400
+    if points < 1 or points > 100000:
+        return jsonify({"error": "INVALID_POINTS", "message": "포인트는 1~100000 사이여야 합니다."}), 400
+
+    store_id = new_id()
+    treasure_id = new_id()
+    store_code = f"ADMIN-{treasure_id[:10].upper()}"
+    address = f"ADMIN/{treasure_id}"
+    tier = "rare" if points >= 30 else "normal"
+
+    with db_session() as conn:
+        conn.execute(
+            """
+            INSERT INTO stores (
+                id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
+            ) VALUES (?, NULL, ?, ?, ?, '', ?, ?, ?)
+            """,
+            (store_id, store_code, name, address, lat, lng, now_iso()),
+        )
+        conn.execute(
+            """
+            INSERT INTO treasures (id, store_id, tier, lat, lng, active_date, points)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (treasure_id, store_id, tier, lat, lng, now_iso(), points),
+        )
+        row = conn.execute(
+            """
+            SELECT t.*, s.name AS store_name, s.address AS store_address, s.store_code
+            FROM treasures t JOIN stores s ON s.id = t.store_id
+            WHERE t.id = ?
+            """,
+            (treasure_id,),
+        ).fetchone()
+        data = row_to_dict(row)
+        data["award_points"] = points
+        return jsonify(data), 201
+
+
+@app.route("/api/admin/treasures/<treasure_id>", methods=["PATCH"])
+@require_admin
+def update_treasure_points(treasure_id):
+    body = request.get_json(force=True) or {}
+    try:
+        points = int(body["points"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "points required"}), 400
+    if points < 1 or points > 100000:
+        return jsonify({"error": "INVALID_POINTS", "message": "포인트는 1~100000 사이여야 합니다."}), 400
+
+    with db_session() as conn:
+        treasure = conn.execute("SELECT * FROM treasures WHERE id = ?", (treasure_id,)).fetchone()
+        if not treasure:
+            return jsonify({"error": "TREASURE_NOT_FOUND"}), 404
+        if treasure["claimed_at"]:
+            return jsonify({"error": "ALREADY_CLAIMED", "message": "이미 획득된 보물은 포인트를 바꿀 수 없습니다."}), 409
+        tier = "rare" if points >= 30 else "normal"
+        conn.execute(
+            "UPDATE treasures SET points = ?, tier = ? WHERE id = ?",
+            (points, tier, treasure_id),
+        )
+        updated = conn.execute("SELECT * FROM treasures WHERE id = ?", (treasure_id,)).fetchone()
+        data = row_to_dict(updated)
+        data["award_points"] = points
+        return jsonify(data)
+
+
+@app.route("/api/admin/treasures/<treasure_id>", methods=["DELETE"])
+@require_admin
+def delete_admin_treasure(treasure_id):
+    with db_session() as conn:
+        row = conn.execute(
+            """
+            SELECT t.*, s.store_code, s.id AS store_id
+            FROM treasures t
+            JOIN stores s ON s.id = t.store_id
+            WHERE t.id = ?
+            """,
+            (treasure_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "TREASURE_NOT_FOUND"}), 404
+        if not (row["store_code"] or "").startswith("ADMIN-"):
+            return jsonify({"error": "NOT_ADMIN_TREASURE", "message": "관리자가 심은 보물만 회수할 수 있습니다."}), 403
+        if row["claimed_at"]:
+            return jsonify({"error": "ALREADY_CLAIMED", "message": "이미 획득된 보물은 회수할 수 없습니다."}), 409
+        conn.execute("DELETE FROM treasures WHERE id = ?", (treasure_id,))
+        conn.execute("DELETE FROM stores WHERE id = ?", (row["store_id"],))
+        return jsonify({"ok": True})
+
+
+@app.route("/api/admin/stats.xlsx")
+@require_admin
+def download_admin_stats():
+    with db_session() as conn:
+        data = build_stats_xlsx(conn)
+    stamp = datetime.utcnow().strftime("%Y%m%d")
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=RS_Treasure_stats_{stamp}.xlsx"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # 대리점 / 사원
 # ---------------------------------------------------------------------------
 
 
 @app.route("/api/dealers")
+@require_admin
 def list_dealers():
     with db_session() as conn:
         rows = conn.execute("SELECT * FROM dealers ORDER BY name").fetchall()
@@ -269,6 +574,7 @@ def list_dealers():
 
 
 @app.route("/api/reps")
+@require_admin
 def list_reps():
     with db_session() as conn:
         rows = conn.execute(
@@ -283,6 +589,7 @@ def list_reps():
 
 
 @app.route("/api/reps", methods=["POST"])
+@require_admin
 def create_rep():
     body = request.get_json(force=True)
     name = (body.get("name") or "").strip()
@@ -349,6 +656,7 @@ def get_rep(rep_id):
 
 
 @app.route("/api/stores", methods=["GET"])
+@require_admin
 def list_stores():
     with db_session() as conn:
         rows = conn.execute(
@@ -363,6 +671,7 @@ def list_stores():
 
 
 @app.route("/api/stores", methods=["POST"])
+@require_admin
 def create_store():
     body = request.get_json(force=True)
     try:
@@ -434,6 +743,17 @@ def _treasure_rows_to_json(rows) -> list[dict]:
     return result
 
 
+def _attach_award_points(conn, items: list[dict]) -> list[dict]:
+    defaults = _point_defaults(conn)
+    for item in items:
+        explicit = item.get("points")
+        if explicit is not None:
+            item["award_points"] = int(explicit)
+        else:
+            item["award_points"] = defaults.get(item.get("tier") or "normal", defaults["normal"])
+    return items
+
+
 TREASURE_STORE_SELECT = """
             SELECT t.*, s.name as store_name, s.address as store_address,
                    s.lat as store_lat, s.lng as store_lng,
@@ -492,10 +812,13 @@ def nearby_treasures():
     items = [i for i in items if i["distance_meters"] <= radius_km * 1000]
     items.sort(key=lambda i: i["distance_meters"])
     items = _one_treasure_per_address(items)
+    with db_session() as conn:
+        _attach_award_points(conn, items)
     return jsonify({"total_in_radius": len(items), "items": items[:limit]})
 
 
 @app.route("/api/treasures/active")
+@require_admin
 def active_treasures():
     """관리자 확인용. 전체 목록은 크므로 기본 상한을 둔다."""
     limit = min(int(request.args.get("limit", 500) or 500), 2000)
@@ -508,10 +831,12 @@ def active_treasures():
             """,
         ).fetchall()
         items = _one_treasure_per_address(_treasure_rows_to_json(rows))
+        _attach_award_points(conn, items)
         return jsonify(items[:limit])
 
 
 @app.route("/api/treasures/spawn", methods=["POST"])
+@require_admin
 def spawn_treasures():
     """보물이 없는 주소에 새 보물을 스폰한다. 같은 기본주소는 한 곳이다."""
     RARE_THRESHOLD_DAYS = 14
@@ -729,7 +1054,7 @@ def complete_visit_session(session_id):
             ).fetchall()
             treasure = treasures[0] if treasures else None
 
-            points = points_for_tier(treasure["tier"]) if treasure else points_for_tier("normal")
+            points = _award_points_for(treasure, _point_defaults(conn))
 
             ledger_id = new_id()
             conn.execute(
@@ -795,6 +1120,7 @@ def get_points(rep_id):
 
 
 @app.route("/api/points")
+@require_admin
 def leaderboard():
     with db_session() as conn:
         rows = conn.execute(
@@ -901,6 +1227,7 @@ def list_rewards(rep_id):
 
 
 @app.route("/api/rewards/<reward_id>/issue", methods=["POST"])
+@require_admin
 def issue_reward(reward_id):
     with db_session() as conn:
         conn.execute(
@@ -918,6 +1245,7 @@ def issue_reward(reward_id):
 
 
 @app.route("/api/import/template")
+@require_admin
 def download_import_template():
     data = build_template_xlsx()
     return Response(
@@ -933,6 +1261,7 @@ def _geocode_in_background() -> None:
 
 
 @app.route("/api/import/excel", methods=["POST"])
+@require_admin
 def import_excel():
     uploads = request.files.getlist("files")
     if not uploads:
@@ -978,6 +1307,7 @@ def import_excel():
 
 
 @app.route("/api/stores/geocode", methods=["POST"])
+@require_admin
 def geocode_stores():
     """좌표가 비어 있는 판매점을 주소로 다시 변환한다."""
     with db_session() as conn:
@@ -986,6 +1316,7 @@ def geocode_stores():
 
 
 @app.route("/api/stores/geocode/status")
+@require_admin
 def geocode_status():
     with db_session() as conn:
         counts = conn.execute(

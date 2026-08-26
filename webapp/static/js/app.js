@@ -45,6 +45,7 @@ function getOrCreateDeviceId() {
 }
 
 function treasurePlaceName(store) {
+  if ((store.address || "").startsWith("ADMIN/")) return store.name || "관리자 지정 보물";
   return store.address || store.name;
 }
 
@@ -257,13 +258,14 @@ function renderTreasureMap(treasures, options = {}) {
     const withinRadius = t.distanceMeters <= VISIT_RADIUS_METERS;
     const marker = L.marker([lat, lng], { icon: treasureIcon(t.tier, withinRadius) });
     const tierLabel = t.tier === "rare" ? "⭐ 레어" : "🏅 일반";
+    const pointsLabel = t.award_points ? ` · ${t.award_points}P` : "";
     const actionHtml = withinRadius
       ? `<button type="button" class="map-visit-btn" data-store-id="${t.store.id}">보물 캐러가기</button>`
       : `<p class="muted small">매장 근처(30m)로 이동하세요</p>`;
 
     marker.bindPopup(
       `<div class="map-popup">
-        <strong>${tierLabel}</strong>
+        <strong>${tierLabel}${pointsLabel}</strong>
         <div class="store-name">${treasurePlaceName(t.store)}</div>
         ${treasurePlaceSub(t.store) ? `<div class="muted small">${treasurePlaceSub(t.store)}</div>` : ""}
         <div class="distance">내 위치에서 ${Math.round(t.distanceMeters)}m</div>
@@ -382,7 +384,7 @@ function renderTreasureList(treasures, totalInRadius, radiusKm = NEARBY_RADIUS_K
     el.className = "item-card";
     el.innerHTML = `
       <div class="item-header">
-        <span class="tier-badge">${t.tier === "rare" ? "⭐ 레어" : "🏅 일반"}</span>
+        <span class="tier-badge">${t.tier === "rare" ? "⭐ 레어" : "🏅 일반"}${t.award_points ? ` · ${t.award_points}P` : ""}</span>
         <span class="distance">${Math.round(t.distanceMeters)}m</span>
       </div>
       <div class="store-name">${treasurePlaceName(t.store)}</div>

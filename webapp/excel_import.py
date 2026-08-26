@@ -392,3 +392,128 @@ def build_template_xlsx() -> bytes:
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def build_stats_xlsx(conn) -> bytes:
+    """전체 대리점/영업사원 포인트·방문 통계 엑셀."""
+    wb = Workbook()
+    header_fill = PatternFill("solid", fgColor="1D4ED8")
+    header_font = Font(color="FFFFFF", bold=True)
+
+    dealer_rows = conn.execute(
+        """
+        SELECT
+            d.dealer_code,
+            d.name,
+            (SELECT COUNT(*) FROM reps r WHERE r.dealer_id = d.id) AS rep_count,
+            (
+                SELECT COALESCE(SUM(pl.points), 0)
+                FROM point_ledger pl
+                JOIN reps r ON r.id = pl.rep_id
+                WHERE r.dealer_id = d.id
+            ) AS total_points,
+            (
+                SELECT COUNT(*)
+                FROM visit_sessions vs
+                JOIN reps r ON r.id = vs.rep_id
+                WHERE r.dealer_id = d.id
+            ) AS visit_count,
+            (
+                SELECT COUNT(*)
+                FROM visit_sessions vs
+                JOIN reps r ON r.id = vs.rep_id
+                WHERE r.dealer_id = d.id AND vs.status = 'auto_approved'
+            ) AS approved_visits
+        FROM dealers d
+        ORDER BY total_points DESC, d.name
+        """
+    ).fetchall()
+
+    dealer_headers = [
+        "대리점ID",
+        "대리점명",
+        "소속사원수",
+        "총포인트",
+        "방문시도",
+        "인증성공",
+    ]
+    dealer_ws = wb.active
+    dealer_ws.title = "대리점통계"
+    dealer_ws.append(dealer_headers)
+    for col in range(1, len(dealer_headers) + 1):
+        cell = dealer_ws.cell(1, col)
+        cell.fill = header_fill
+        cell.font = header_font
+        dealer_ws.column_dimensions[get_column_letter(col)].width = 16
+    for row in dealer_rows:
+        dealer_ws.append(
+            [
+                row["dealer_code"],
+                row["name"],
+                int(row["rep_count"] or 0),
+                int(row["total_points"] or 0),
+                int(row["visit_count"] or 0),
+                int(row["approved_visits"] or 0),
+            ]
+        )
+    dealer_ws.freeze_panes = "A2"
+
+    rep_rows = conn.execute(
+        """
+        SELECT
+            r.employee_code,
+            r.name,
+            d.dealer_code,
+            d.name AS dealer_name,
+            COALESCE(SUM(pl.points), 0) AS total_points,
+            (
+                SELECT COUNT(*) FROM visit_sessions vs WHERE vs.rep_id = r.id
+            ) AS visit_count,
+            (
+                SELECT COUNT(*) FROM visit_sessions vs
+                WHERE vs.rep_id = r.id AND vs.status = 'auto_approved'
+            ) AS approved_visits,
+            MAX(pl.created_at) AS last_point_at
+        FROM reps r
+        LEFT JOIN dealers d ON d.id = r.dealer_id
+        LEFT JOIN point_ledger pl ON pl.rep_id = r.id
+        GROUP BY r.id
+        ORDER BY total_points DESC, r.name
+        """
+    ).fetchall()
+
+    rep_headers = [
+        "고유ID",
+        "이름",
+        "소속대리점ID",
+        "소속대리점명",
+        "총포인트",
+        "방문시도",
+        "인증성공",
+        "최근포인트일시",
+    ]
+    rep_ws = wb.create_sheet("영업사원통계")
+    rep_ws.append(rep_headers)
+    for col in range(1, len(rep_headers) + 1):
+        cell = rep_ws.cell(1, col)
+        cell.fill = header_fill
+        cell.font = header_font
+        rep_ws.column_dimensions[get_column_letter(col)].width = 18
+    for row in rep_rows:
+        rep_ws.append(
+            [
+                row["employee_code"],
+                row["name"],
+                row["dealer_code"] or "",
+                row["dealer_name"] or "소속 없음",
+                int(row["total_points"] or 0),
+                int(row["visit_count"] or 0),
+                int(row["approved_visits"] or 0),
+                row["last_point_at"] or "",
+            ]
+        )
+    rep_ws.freeze_panes = "A2"
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

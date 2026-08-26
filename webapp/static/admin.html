@@ -4,90 +4,160 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>RS-Treasure Hunter - 관리자</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <link rel="stylesheet" href="css/style.css" />
 </head>
-<body>
+<body class="admin-page">
 
 <header class="topbar">
   <span class="brand">🛠️ RS-Treasure Hunter 관리자</span>
+  <nav id="adminNav" class="hidden">
+    <span id="adminUser" class="muted small"></span>
+    <button id="adminLogoutBtn">로그아웃</button>
+  </nav>
 </header>
 
-<main id="admin-app">
+<main>
 
-  <section class="screen">
-    <h2>엑셀 마스터 업로드</h2>
-    <div class="card">
-      <p class="muted small">
-        판매점코드가 있으면 주소가 같아도 매장을 따로 등록합니다. 기본주소로 GPS를 잡고, 상세주소는 표시용입니다.
-      </p>
-      <a class="btn-secondary" href="api/import/template">양식 다운로드</a>
-      <input id="excelFiles" type="file" accept=".xlsx" multiple />
-      <button id="importBtn" class="btn-primary">엑셀 올리기</button>
-      <p id="importMessage" class="muted small"></p>
-      <pre id="importResult" class="import-result hidden"></pre>
+  <section id="screen-admin-login" class="screen">
+    <div class="card center-card">
+      <h1>관리자 로그인</h1>
+      <p class="muted">관리자만 엑셀 업로드, 보물 심기, 통계 다운로드를 할 수 있습니다.</p>
+      <input id="adminUsername" type="text" placeholder="관리자 아이디" autocomplete="username" />
+      <input id="adminPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
+      <button id="adminLoginBtn" class="btn-primary">로그인</button>
+      <p id="adminLoginError" class="error hidden"></p>
     </div>
   </section>
 
-  <section class="screen">
-    <h2>판매점 빠른 등록 (GPS 테스트용)</h2>
-    <div class="card">
-      <input id="storeCode" type="text" placeholder="판매점코드" />
-      <input id="storeName" type="text" placeholder="판매점명" />
-      <input id="storeAddress" type="text" placeholder="기본주소" />
-      <input id="storeDetailAddress" type="text" placeholder="상세주소 (층/호수, 선택)" />
-      <input id="storeDealerCode" type="text" placeholder="소속대리점ID (선택)" />
-      <div class="row">
-        <input id="storeLat" type="number" step="0.000001" placeholder="위도(lat)" />
-        <input id="storeLng" type="number" step="0.000001" placeholder="경도(lng)" />
+  <div id="admin-app" class="hidden">
+
+    <section class="screen">
+      <h2>보물 심기</h2>
+      <div class="card">
+        <p class="muted small">지도를 눌러 위치를 지정하거나, 현재 위치/위경도를 직접 입력하세요. 포인트는 이 보물에만 적용됩니다.</p>
+        <div id="plantMap" class="treasure-map admin-map" aria-label="보물 심기 지도"></div>
+        <p class="muted small map-hint">지도를 클릭하면 그 자리에 보물이 심어집니다.</p>
+        <input id="plantName" type="text" placeholder="보물 이름 (예: 코엑스 앞 이벤트)" />
+        <div class="row">
+          <input id="plantLat" type="number" step="0.000001" placeholder="위도(lat)" />
+          <input id="plantLng" type="number" step="0.000001" placeholder="경도(lng)" />
+        </div>
+        <input id="plantPoints" type="number" min="1" step="1" value="10" placeholder="포인트" />
+        <button id="plantUseMyLocationBtn" class="btn-secondary">현재 위치로 지정</button>
+        <button id="plantTreasureBtn" class="btn-primary">이 위치에 보물 심기</button>
+        <p id="plantMessage" class="muted small"></p>
       </div>
-      <button id="useMyLocationBtn" class="btn-secondary">현재 위치로 채우기</button>
-      <button id="addStoreBtn" class="btn-primary">등록</button>
-      <p id="storeMessage" class="muted small"></p>
-    </div>
-  </section>
+    </section>
 
-  <section class="screen">
-    <div class="between" style="margin-top:0">
-      <h2>대리점</h2>
-    </div>
-    <div id="dealerList" class="list"></div>
-  </section>
+    <section class="screen">
+      <h2>심은 보물</h2>
+      <div id="plantedList" class="list"></div>
+    </section>
 
-  <section class="screen">
-    <h2>영업사원</h2>
-    <div id="repList" class="list"></div>
-  </section>
-
-  <section class="screen">
-    <div class="between">
-      <h2>판매점 목록</h2>
-      <div>
-        <button id="geocodeBtn" class="btn-secondary">주소 → 좌표 변환</button>
-        <button id="spawnBtn" class="btn-secondary">보물 스폰 실행</button>
+    <section class="screen">
+      <h2>기본 포인트 · 통계</h2>
+      <div class="card">
+        <p class="muted small">엑셀 스폰 보물(일반/레어)의 기본 포인트입니다. 위에서 직접 심은 보물은 각자 지정한 포인트를 씁니다.</p>
+        <div class="row">
+          <input id="pointsNormal" type="number" min="1" placeholder="일반 포인트" />
+          <input id="pointsRare" type="number" min="1" placeholder="레어 포인트" />
+        </div>
+        <button id="savePointsBtn" class="btn-secondary">기본 포인트 저장</button>
+        <p id="pointsMessage" class="muted small"></p>
+        <button id="statsDownloadBtn" class="btn-primary">전체 대리점/영업사원 통계 다운로드</button>
+        <p id="statsMessage" class="muted small"></p>
       </div>
-    </div>
-    <p id="spawnMessage" class="muted small"></p>
-    <div class="card geocode-status-card">
-      <div class="between geocode-status-header">
-        <strong>좌표 변환 진행 상황</strong>
-        <button id="refreshGeocodeStatusBtn" class="btn-secondary compact">새로고침</button>
-      </div>
-      <div class="progress-track">
-        <div id="geocodeProgressFill" class="progress-fill" style="width: 0%"></div>
-      </div>
-      <p id="geocodeStatusSummary" class="muted small">아직 집계 전입니다.</p>
-      <pre id="geocodeStatusLog" class="import-result small"></pre>
-    </div>
-    <div id="storeList" class="list"></div>
-  </section>
+    </section>
 
-  <section class="screen">
-    <h2>랭킹보드</h2>
-    <div id="leaderboard" class="list"></div>
-  </section>
+    <section class="screen">
+      <h2>관리자 비밀번호</h2>
+      <div class="card">
+        <input id="adminCurrentPassword" type="password" placeholder="현재 비밀번호" autocomplete="current-password" />
+        <input id="adminNewPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
+        <input id="adminNewPasswordConfirm" type="password" placeholder="새 비밀번호 확인" autocomplete="new-password" />
+        <button id="adminChangePasswordBtn" class="btn-secondary">비밀번호 변경</button>
+        <p id="adminPasswordMessage" class="muted small"></p>
+      </div>
+    </section>
+
+    <section class="screen">
+      <h2>엑셀 마스터 업로드</h2>
+      <div class="card">
+        <p class="muted small">
+          판매점코드가 있으면 주소가 같아도 매장을 따로 등록합니다. 기본주소로 GPS를 잡고, 상세주소는 표시용입니다.
+        </p>
+        <button id="templateBtn" class="btn-secondary">양식 다운로드</button>
+        <input id="excelFiles" type="file" accept=".xlsx" multiple />
+        <button id="importBtn" class="btn-primary">엑셀 올리기</button>
+        <p id="importMessage" class="muted small"></p>
+        <pre id="importResult" class="import-result hidden"></pre>
+      </div>
+    </section>
+
+    <section class="screen">
+      <h2>판매점 빠른 등록 (GPS 테스트용)</h2>
+      <div class="card">
+        <input id="storeCode" type="text" placeholder="판매점코드" />
+        <input id="storeName" type="text" placeholder="판매점명" />
+        <input id="storeAddress" type="text" placeholder="기본주소" />
+        <input id="storeDetailAddress" type="text" placeholder="상세주소 (층/호수, 선택)" />
+        <input id="storeDealerCode" type="text" placeholder="소속대리점ID (선택)" />
+        <div class="row">
+          <input id="storeLat" type="number" step="0.000001" placeholder="위도(lat)" />
+          <input id="storeLng" type="number" step="0.000001" placeholder="경도(lng)" />
+        </div>
+        <button id="useMyLocationBtn" class="btn-secondary">현재 위치로 채우기</button>
+        <button id="addStoreBtn" class="btn-primary">등록</button>
+        <p id="storeMessage" class="muted small"></p>
+      </div>
+    </section>
+
+    <section class="screen">
+      <div class="between" style="margin-top:0">
+        <h2>대리점</h2>
+      </div>
+      <div id="dealerList" class="list"></div>
+    </section>
+
+    <section class="screen">
+      <h2>영업사원</h2>
+      <div id="repList" class="list"></div>
+    </section>
+
+    <section class="screen">
+      <div class="between">
+        <h2>판매점 목록</h2>
+        <div>
+          <button id="geocodeBtn" class="btn-secondary">주소 → 좌표 변환</button>
+          <button id="spawnBtn" class="btn-secondary">보물 스폰 실행</button>
+        </div>
+      </div>
+      <p id="spawnMessage" class="muted small"></p>
+      <div class="card geocode-status-card">
+        <div class="between geocode-status-header">
+          <strong>좌표 변환 진행 상황</strong>
+          <button id="refreshGeocodeStatusBtn" class="btn-secondary compact">새로고침</button>
+        </div>
+        <div class="progress-track">
+          <div id="geocodeProgressFill" class="progress-fill" style="width: 0%"></div>
+        </div>
+        <p id="geocodeStatusSummary" class="muted small">아직 집계 전입니다.</p>
+        <pre id="geocodeStatusLog" class="import-result small"></pre>
+      </div>
+      <div id="storeList" class="list"></div>
+    </section>
+
+    <section class="screen">
+      <h2>랭킹보드</h2>
+      <div id="leaderboard" class="list"></div>
+    </section>
+
+  </div>
 
 </main>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="js/admin.js"></script>
 </body>
 </html>

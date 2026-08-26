@@ -395,3 +395,39 @@ a.btn-secondary {
   text-align: center;
   text-decoration: none;
 }
+
+body.admin-page main {
+  max-width: 640px;
+}
+
+#adminNav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+#adminNav button {
+  border: none;
+  background: none;
+  color: #999;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.admin-map {
+  height: 280px;
+}
+
+.planted-actions {
+  margin-top: 10px;
+  align-items: center;
+}
+
+.planted-actions input {
+  margin-bottom: 0;
+}
+
+.planted-actions .btn-secondary {
+  margin-bottom: 0;
+}
