@@ -943,6 +943,40 @@ async function loadCatalog() {
   }
 }
 
+function compactSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\s\-_/]/g, "");
+}
+
+function digitSearchText(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function nameMatchesQuery(text, query) {
+  const q = compactSearchText(query);
+  if (!q) return true;
+  const compact = compactSearchText(text);
+  const digits = digitSearchText(text);
+  const qDigits = digitSearchText(query);
+  if (compact.includes(q)) return true;
+  if (qDigits && digits.includes(qDigits)) return true;
+  return false;
+}
+
+function bindMenuSearch(search, onInput) {
+  search.type = "search";
+  search.className = "multi-pick-search";
+  search.setAttribute("autocomplete", "off");
+  search.addEventListener("click", (e) => e.stopPropagation());
+  search.addEventListener("mousedown", (e) => e.stopPropagation());
+  search.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") e.preventDefault();
+  });
+  search.addEventListener("input", onInput);
+}
+
 function fillProductSelect() {
   const menu = $("productShortMenu");
   if (!menu) return;
@@ -950,24 +984,15 @@ function fillProductSelect() {
   const prevQuery = (menu.querySelector(".multi-pick-search") || {}).value || "";
   menu.innerHTML = "";
   const search = document.createElement("input");
-  search.type = "search";
-  search.className = "multi-pick-search";
-  search.placeholder = "대표상품명 검색";
+  search.placeholder = "번호·이름 검색";
   search.value = prevQuery;
-  search.setAttribute("autocomplete", "off");
-  search.addEventListener("click", (e) => e.stopPropagation());
-  search.addEventListener("keydown", (e) => {
-    e.stopPropagation();
-    if (e.key === "Enter") e.preventDefault();
-  });
-  search.addEventListener("input", () => filterProductMenu(menu));
+  bindMenuSearch(search, () => filterPickMenu(menu));
   menu.appendChild(search);
   for (const p of modelCatalog) {
     const label = document.createElement("label");
     label.className = "multi-pick-item";
-    label.dataset.search = String(p.product_short || "")
-      .toLowerCase()
-      .replace(/\s+/g, "");
+    const models = (p.models || []).map((m) => m.model_name).join(" ");
+    label.dataset.search = `${p.product_short || ""} ${models}`;
     const box = document.createElement("input");
     box.type = "checkbox";
     box.value = p.product_short;
@@ -985,21 +1010,18 @@ function fillProductSelect() {
   empty.className = "multi-pick-empty muted small hidden";
   empty.textContent = "검색 결과가 없습니다.";
   menu.appendChild(empty);
-  filterProductMenu(menu);
+  filterPickMenu(menu);
   pickedProductShorts = pickedProductShorts.filter((v) => modelCatalog.some((p) => p.product_short === v));
   updateMultiPickLabel("productShortBtn", pickedProductShorts, "전체");
   fillModelSelect();
 }
 
-function filterProductMenu(menu) {
+function filterPickMenu(menu) {
   if (!menu) return;
-  const q = String((menu.querySelector(".multi-pick-search") || {}).value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "");
+  const q = (menu.querySelector(".multi-pick-search") || {}).value || "";
   let shown = 0;
   menu.querySelectorAll(".multi-pick-item").forEach((el) => {
-    const hit = !q || (el.dataset.search || "").includes(q);
+    const hit = nameMatchesQuery(el.dataset.search || "", q);
     el.classList.toggle("hidden", !hit);
     if (hit) shown += 1;
   });
@@ -1033,6 +1055,7 @@ function fillModelSelect() {
   if (!menu || !btn) return;
   const models = selectedProductModels();
   const keep = new Set(pickedModelNames);
+  const prevQuery = (menu.querySelector(".multi-pick-search") || {}).value || "";
   menu.innerHTML = "";
   btn.disabled = !models.length;
   if (!models.length) {
@@ -1040,9 +1063,15 @@ function fillModelSelect() {
     updateMultiPickLabel("modelNameBtn", [], "대표상품 먼저");
     return;
   }
+  const search = document.createElement("input");
+  search.placeholder = "번호·이름 검색";
+  search.value = prevQuery;
+  bindMenuSearch(search, () => filterPickMenu(menu));
+  menu.appendChild(search);
   for (const m of models) {
     const label = document.createElement("label");
     label.className = "multi-pick-item";
+    label.dataset.search = m.model_name || "";
     const box = document.createElement("input");
     box.type = "checkbox";
     box.value = m.model_name;
@@ -1056,6 +1085,11 @@ function fillModelSelect() {
     label.appendChild(meta);
     menu.appendChild(label);
   }
+  const empty = document.createElement("div");
+  empty.className = "multi-pick-empty muted small hidden";
+  empty.textContent = "검색 결과가 없습니다.";
+  menu.appendChild(empty);
+  filterPickMenu(menu);
   pickedModelNames = pickedModelNames.filter((v) => models.some((m) => m.model_name === v));
   updateMultiPickLabel("modelNameBtn", pickedModelNames, "해당 기종 전체");
 }
@@ -1080,6 +1114,20 @@ function readChecked(menuId) {
   return [...menu.querySelectorAll("input[type=checkbox]:checked")].map((el) => el.value);
 }
 
+function placeMultiPickMenu(menu) {
+  if (!menu || menu.classList.contains("hidden")) return;
+  const host = menu.closest(".multi-pick");
+  const btn = host && host.querySelector(".multi-pick-btn");
+  if (!btn) return;
+  const r = btn.getBoundingClientRect();
+  const width = Math.max(240, r.width);
+  let left = r.left;
+  if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  menu.style.minWidth = `${Math.round(width)}px`;
+}
+
 function closeMultiPickMenus(exceptId) {
   document.querySelectorAll(".multi-pick-menu").forEach((el) => {
     if (el.id !== exceptId) el.classList.add("hidden");
@@ -1092,7 +1140,8 @@ function toggleMultiPick(menuId) {
   const willOpen = menu.classList.contains("hidden");
   closeMultiPickMenus(willOpen ? menuId : "");
   menu.classList.toggle("hidden", !willOpen);
-  if (willOpen && menuId === "productShortMenu") {
+  if (willOpen) {
+    placeMultiPickMenu(menu);
     const search = menu.querySelector(".multi-pick-search");
     if (search) setTimeout(() => search.focus(), 0);
   }
@@ -1387,9 +1436,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (modelMenu) {
     modelMenu.addEventListener("click", (e) => e.stopPropagation());
-    modelMenu.addEventListener("change", onModelNameChange);
+    modelMenu.addEventListener("change", (e) => {
+      if (e.target && e.target.classList.contains("multi-pick-search")) return;
+      onModelNameChange();
+    });
   }
   document.addEventListener("click", () => closeMultiPickMenus(""));
+  window.addEventListener("resize", () => {
+    document.querySelectorAll(".multi-pick-menu:not(.hidden)").forEach(placeMultiPickMenu);
+  });
   const hqPanel = $("hqPanel");
   if (hqPanel) hqPanel.addEventListener("click", handleHqClick);
   const hqSearch = $("hqSearch");

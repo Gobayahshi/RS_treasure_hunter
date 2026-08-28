@@ -525,14 +525,16 @@ body.inventory-assist .topbar {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 280px;
   flex-wrap: wrap;
+  overflow: visible;
 }
 
 #inventoryFilterBar .inventory-model-filter {
   padding: 4px 8px;
   box-shadow: none;
+  overflow: visible;
 }
 
 #inventoryFilterBar #mapLookupBtn {
@@ -955,8 +957,10 @@ body.inventory-assist .inventory-shell {
 .multi-pick {
   position: relative;
   min-width: 168px;
+  overflow: visible;
 }
 
+.multi-pick-btn,
 .inventory-map-tools .multi-pick-btn {
   width: 100%;
   margin: 0;
@@ -977,18 +981,18 @@ body.inventory-assist .inventory-shell {
 }
 
 .multi-pick-menu {
-  position: absolute;
-  z-index: 800;
+  position: fixed;
+  z-index: 4000;
   top: calc(100% + 4px);
   left: 0;
-  min-width: 220px;
-  max-height: 280px;
+  min-width: 240px;
+  max-height: min(360px, calc(100vh - 80px));
   overflow: auto;
   padding: 6px;
   background: #fff;
   border: 1px solid #d1d5db;
   border-radius: 8px;
-  box-shadow: 0 8px 20px rgba(0,0,0,.12);
+  box-shadow: 0 8px 20px rgba(0,0,0,.18);
 }
 
 .multi-pick-search {
