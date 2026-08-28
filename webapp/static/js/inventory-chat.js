@@ -133,6 +133,8 @@ function showLoggedOut() {
   $("chatNav").classList.add("hidden");
   const uploadBar = $("inventoryUploadBar");
   if (uploadBar) uploadBar.classList.add("hidden");
+  const filterBar = $("inventoryFilterBar");
+  if (filterBar) filterBar.classList.add("hidden");
   const asOf = $("asOfBadge");
   if (asOf) {
     asOf.textContent = "";
@@ -147,6 +149,8 @@ function showLoggedIn(user) {
   $("chatNav").classList.remove("hidden");
   const uploadBar = $("inventoryUploadBar");
   if (uploadBar) uploadBar.classList.remove("hidden");
+  const filterBar = $("inventoryFilterBar");
+  if (filterBar) filterBar.classList.remove("hidden");
   const name = inventoryUser.dealer_name || inventoryUser.username || "";
   $("chatUser").textContent = name ? `${name}` : "";
   const adminLink = $("chatAdminLink");
@@ -678,9 +682,21 @@ function addUser(text) {
   addBubble("user", text);
 }
 
+async function waitForUploadJob(jobId, statusEl) {
+  for (let i = 0; i < 300; i++) {
+    const data = await api(`/inventory/excel/status?job_id=${encodeURIComponent(jobId)}`);
+    if (statusEl && data.message) statusEl.textContent = data.message;
+    if (data.status === "done") return data.summary || data;
+    if (data.status === "error") throw new Error(data.message || "업로드에 실패했습니다.");
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error("저장이 아직 끝나지 않았습니다. 잠시 후 새로고침해 보세요.");
+}
+
 async function handleInventoryUpload() {
   const input = $("inventoryFile");
   const status = $("inventoryUploadStatus");
+  const btn = $("inventoryUploadBtn");
   if (!input || !status) return;
   const file = input.files && input.files[0];
   if (!file) {
@@ -689,9 +705,11 @@ async function handleInventoryUpload() {
   }
   const form = new FormData();
   form.append("file", file);
-  status.textContent = "올리는 중... 파일이 크면 1~2분 걸릴 수 있습니다.";
+  status.textContent = "파일을 받는 중...";
+  if (btn) btn.disabled = true;
   try {
-    const data = await api("/inventory/excel", { method: "POST", body: form });
+    const started = await api("/inventory/excel", { method: "POST", body: form });
+    const data = started.job_id ? await waitForUploadJob(started.job_id, status) : started;
     const name = data.dealer_name || inventoryUser.dealer_name || "";
     const msg = `${name} 재고 현황을 업데이트 했습니다`.trim();
     status.textContent = msg;
@@ -705,13 +723,11 @@ async function handleInventoryUpload() {
       addBotError(mapErr);
     }
   } catch (e) {
-    const raw = friendlyError(e);
-    const msg =
-      /응답하지 않습니다|연결하지 못했습니다/.test(raw)
-        ? "파일이 크거나 서버가 바쁩니다. 잠시 후 다시 올려 주세요."
-        : raw;
+    const msg = friendlyError(e);
     status.textContent = msg;
     addBotError(e);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
