@@ -682,10 +682,31 @@ function addUser(text) {
   addBubble("user", text);
 }
 
-async function waitForUploadJob(jobId, statusEl) {
+function setChatNotice(text) {
+  const log = $("chatLog");
+  if (!log) return;
+  let el = $("chatUploadNotice");
+  if (!text) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "chatUploadNotice";
+    el.className = "chat-bubble bot";
+    el.appendChild(document.createElement("div"));
+    const greetEl = log.querySelector(".chat-bubble.bot");
+    if (greetEl) greetEl.after(el);
+    else log.appendChild(el);
+  }
+  el.firstElementChild.textContent = text;
+  log.scrollTop = log.scrollHeight;
+}
+
+async function waitForUploadJob(jobId) {
   for (let i = 0; i < 300; i++) {
     const data = await api(`/inventory/excel/status?job_id=${encodeURIComponent(jobId)}`);
-    if (statusEl && data.message) statusEl.textContent = data.message;
+    if (data.message) setChatNotice(data.message);
     if (data.status === "done") return data.summary || data;
     if (data.status === "error") throw new Error(data.message || "업로드에 실패했습니다.");
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -695,25 +716,23 @@ async function waitForUploadJob(jobId, statusEl) {
 
 async function handleInventoryUpload() {
   const input = $("inventoryFile");
-  const status = $("inventoryUploadStatus");
   const btn = $("inventoryUploadBtn");
-  if (!input || !status) return;
+  if (!input) return;
   const file = input.files && input.files[0];
   if (!file) {
-    status.textContent = "xlsx 파일을 선택해주세요.";
+    setChatNotice("xlsx 파일을 선택해주세요.");
     return;
   }
   const form = new FormData();
   form.append("file", file);
-  status.textContent = "파일을 받는 중...";
+  setChatNotice("파일을 받는 중...");
   if (btn) btn.disabled = true;
   try {
     const started = await api("/inventory/excel", { method: "POST", body: form });
-    const data = started.job_id ? await waitForUploadJob(started.job_id, status) : started;
+    const data = started.job_id ? await waitForUploadJob(started.job_id) : started;
     const name = data.dealer_name || inventoryUser.dealer_name || "";
     const msg = `${name} 재고 현황을 업데이트 했습니다`.trim();
-    status.textContent = msg;
-    addBot(msg);
+    setChatNotice(msg);
     catalogPicked = false;
     await loadCatalog();
     if (inventoryUser.can_see_all) loadHqSummary();
@@ -723,9 +742,7 @@ async function handleInventoryUpload() {
       addBotError(mapErr);
     }
   } catch (e) {
-    const msg = friendlyError(e);
-    status.textContent = msg;
-    addBotError(e);
+    setChatNotice(friendlyError(e));
   } finally {
     if (btn) btn.disabled = false;
   }
