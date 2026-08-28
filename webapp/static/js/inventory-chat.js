@@ -26,6 +26,8 @@ let hqDealerId = "";
 let modelCatalog = [];
 let mapProductShorts = [];
 let mapModelNames = [];
+let pickedProductShorts = [];
+let pickedModelNames = [];
 let mapPinColor = "";
 let mapAgedOnly = false;
 let catalogPicked = false;
@@ -695,11 +697,11 @@ function greet() {
   const dealer = inventoryUser.dealer_name;
   if (dealer && !inventoryUser.can_see_all) {
     addBot(
-      "위 드롭다운에서 대표상품명·모델명을 고르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다."
+      "위 드롭다운에서 대표상품명·모델명을 고른 뒤 조회를 누르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다."
     );
   } else {
     addBot(
-      "올린 대리점 재고를 함께 봅니다. 왼쪽에서 대리점을 고를 수 있고, 위 드롭다운에서 대표상품명·모델명을 고르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다."
+      "올린 대리점 재고를 함께 봅니다. 왼쪽에서 대리점을 고를 수 있고, 위 드롭다운에서 대표상품명·모델명을 고른 뒤 조회를 누르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다."
     );
   }
   requestMyLocation({ announce: false });
@@ -787,7 +789,7 @@ async function loadCatalog() {
 function fillProductSelect() {
   const menu = $("productShortMenu");
   if (!menu) return;
-  const keep = new Set(mapProductShorts);
+  const keep = new Set(pickedProductShorts);
   menu.innerHTML = "";
   for (const p of modelCatalog) {
     const label = document.createElement("label");
@@ -805,14 +807,14 @@ function fillProductSelect() {
     label.appendChild(meta);
     menu.appendChild(label);
   }
-  mapProductShorts = mapProductShorts.filter((v) => modelCatalog.some((p) => p.product_short === v));
-  updateMultiPickLabel("productShortBtn", mapProductShorts, "전체");
+  pickedProductShorts = pickedProductShorts.filter((v) => modelCatalog.some((p) => p.product_short === v));
+  updateMultiPickLabel("productShortBtn", pickedProductShorts, "전체");
   fillModelSelect();
 }
 
 function selectedProductModels() {
-  const products = mapProductShorts.length
-    ? modelCatalog.filter((p) => mapProductShorts.includes(p.product_short))
+  const products = pickedProductShorts.length
+    ? modelCatalog.filter((p) => pickedProductShorts.includes(p.product_short))
     : [];
   const merged = new Map();
   for (const p of products) {
@@ -830,11 +832,11 @@ function fillModelSelect() {
   const btn = $("modelNameBtn");
   if (!menu || !btn) return;
   const models = selectedProductModels();
-  const keep = new Set(mapModelNames);
+  const keep = new Set(pickedModelNames);
   menu.innerHTML = "";
   btn.disabled = !models.length;
   if (!models.length) {
-    mapModelNames = [];
+    pickedModelNames = [];
     updateMultiPickLabel("modelNameBtn", [], "대표상품 먼저");
     return;
   }
@@ -854,8 +856,8 @@ function fillModelSelect() {
     label.appendChild(meta);
     menu.appendChild(label);
   }
-  mapModelNames = mapModelNames.filter((v) => models.some((m) => m.model_name === v));
-  updateMultiPickLabel("modelNameBtn", mapModelNames, "해당 기종 전체");
+  pickedModelNames = pickedModelNames.filter((v) => models.some((m) => m.model_name === v));
+  updateMultiPickLabel("modelNameBtn", pickedModelNames, "해당 기종 전체");
 }
 
 function updateMultiPickLabel(btnId, values, emptyText) {
@@ -898,20 +900,23 @@ function resetMapStyle() {
 }
 
 function onProductShortChange() {
-  mapProductShorts = readChecked("productShortMenu");
-  mapModelNames = [];
-  catalogPicked = true;
-  resetMapStyle();
-  updateMultiPickLabel("productShortBtn", mapProductShorts, "전체");
+  pickedProductShorts = readChecked("productShortMenu");
+  pickedModelNames = [];
+  updateMultiPickLabel("productShortBtn", pickedProductShorts, "전체");
   fillModelSelect();
-  loadInventoryMap(lastCoords).catch((err) => addBot(friendlyError(err)));
 }
 
 function onModelNameChange() {
-  mapModelNames = readChecked("modelNameMenu");
+  pickedModelNames = readChecked("modelNameMenu");
+  updateMultiPickLabel("modelNameBtn", pickedModelNames, "해당 기종 전체");
+}
+
+function applyMapLookup() {
+  mapProductShorts = pickedProductShorts.slice();
+  mapModelNames = pickedModelNames.slice();
   catalogPicked = true;
   resetMapStyle();
-  updateMultiPickLabel("modelNameBtn", mapModelNames, "해당 기종 전체");
+  closeMultiPickMenus("");
   loadInventoryMap(lastCoords).catch((err) => addBot(friendlyError(err)));
 }
 
@@ -1147,6 +1152,8 @@ async function restore() {
 document.addEventListener("DOMContentLoaded", () => {
   $("chatLoginBtn").addEventListener("click", handleLogin);
   $("inventoryUploadBtn").addEventListener("click", handleInventoryUpload);
+  const lookupBtn = $("mapLookupBtn");
+  if (lookupBtn) lookupBtn.addEventListener("click", applyMapLookup);
   const productBtn = $("productShortBtn");
   const modelBtn = $("modelNameBtn");
   if (productBtn) productBtn.addEventListener("click", (e) => {

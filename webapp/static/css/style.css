@@ -756,6 +756,13 @@ body.inventory-assist .inventory-shell {
   color: #fff;
 }
 
+#mapLookupBtn {
+  align-self: flex-end;
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
 .skt-dealer-wrap {
   display: flex;
   align-items: center;
