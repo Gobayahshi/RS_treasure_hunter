@@ -835,7 +835,12 @@ async function loadCatalog() {
   const qs = inventoryUser.can_see_all && hqDealerId ? `?dealer_id=${encodeURIComponent(hqDealerId)}` : "";
   try {
     const data = await api(`/inventory/catalog${qs}`);
-    modelCatalog = data.products || [];
+    modelCatalog = (data.products || []).slice().sort((a, b) =>
+      String(a.product_short || "").localeCompare(String(b.product_short || ""), "ko", {
+        numeric: true,
+        sensitivity: "base",
+      })
+    );
     renderAsOf(data);
     fillProductSelect();
   } catch (_) {
@@ -848,10 +853,27 @@ function fillProductSelect() {
   const menu = $("productShortMenu");
   if (!menu) return;
   const keep = new Set(pickedProductShorts);
+  const prevQuery = (menu.querySelector(".multi-pick-search") || {}).value || "";
   menu.innerHTML = "";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.className = "multi-pick-search";
+  search.placeholder = "대표상품명 검색";
+  search.value = prevQuery;
+  search.setAttribute("autocomplete", "off");
+  search.addEventListener("click", (e) => e.stopPropagation());
+  search.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") e.preventDefault();
+  });
+  search.addEventListener("input", () => filterProductMenu(menu));
+  menu.appendChild(search);
   for (const p of modelCatalog) {
     const label = document.createElement("label");
     label.className = "multi-pick-item";
+    label.dataset.search = String(p.product_short || "")
+      .toLowerCase()
+      .replace(/\s+/g, "");
     const box = document.createElement("input");
     box.type = "checkbox";
     box.value = p.product_short;
@@ -865,9 +887,30 @@ function fillProductSelect() {
     label.appendChild(meta);
     menu.appendChild(label);
   }
+  const empty = document.createElement("div");
+  empty.className = "multi-pick-empty muted small hidden";
+  empty.textContent = "검색 결과가 없습니다.";
+  menu.appendChild(empty);
+  filterProductMenu(menu);
   pickedProductShorts = pickedProductShorts.filter((v) => modelCatalog.some((p) => p.product_short === v));
   updateMultiPickLabel("productShortBtn", pickedProductShorts, "전체");
   fillModelSelect();
+}
+
+function filterProductMenu(menu) {
+  if (!menu) return;
+  const q = String((menu.querySelector(".multi-pick-search") || {}).value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  let shown = 0;
+  menu.querySelectorAll(".multi-pick-item").forEach((el) => {
+    const hit = !q || (el.dataset.search || "").includes(q);
+    el.classList.toggle("hidden", !hit);
+    if (hit) shown += 1;
+  });
+  const empty = menu.querySelector(".multi-pick-empty");
+  if (empty) empty.classList.toggle("hidden", !!shown);
 }
 
 function selectedProductModels() {
@@ -882,7 +925,12 @@ function selectedProductModels() {
       merged.set(m.model_name, prev);
     }
   }
-  return [...merged.values()].sort((a, b) => b.qty - a.qty || a.model_name.localeCompare(b.model_name));
+  return [...merged.values()].sort((a, b) =>
+    String(a.model_name || "").localeCompare(String(b.model_name || ""), "ko", {
+      numeric: true,
+      sensitivity: "base",
+    })
+  );
 }
 
 function fillModelSelect() {
@@ -950,6 +998,10 @@ function toggleMultiPick(menuId) {
   const willOpen = menu.classList.contains("hidden");
   closeMultiPickMenus(willOpen ? menuId : "");
   menu.classList.toggle("hidden", !willOpen);
+  if (willOpen && menuId === "productShortMenu") {
+    const search = menu.querySelector(".multi-pick-search");
+    if (search) setTimeout(() => search.focus(), 0);
+  }
 }
 
 function resetMapStyle() {
@@ -1228,7 +1280,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const modelMenu = $("modelNameMenu");
   if (productMenu) {
     productMenu.addEventListener("click", (e) => e.stopPropagation());
-    productMenu.addEventListener("change", onProductShortChange);
+    productMenu.addEventListener("change", (e) => {
+      if (e.target && e.target.classList.contains("multi-pick-search")) return;
+      onProductShortChange();
+    });
   }
   if (modelMenu) {
     modelMenu.addEventListener("click", (e) => e.stopPropagation());

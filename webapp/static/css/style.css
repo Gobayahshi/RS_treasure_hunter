@@ -931,13 +931,31 @@ body.inventory-assist .inventory-shell {
   top: calc(100% + 4px);
   left: 0;
   min-width: 220px;
-  max-height: 240px;
+  max-height: 280px;
   overflow: auto;
   padding: 6px;
   background: #fff;
   border: 1px solid #d1d5db;
   border-radius: 8px;
   box-shadow: 0 8px 20px rgba(0,0,0,.12);
+}
+
+.multi-pick-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  background: #fff;
+}
+
+.multi-pick-empty {
+  padding: 8px 6px;
 }
 
 .multi-pick-item {
