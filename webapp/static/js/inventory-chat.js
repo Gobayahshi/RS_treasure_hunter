@@ -975,6 +975,7 @@ function applyMapLookup() {
   catalogPicked = true;
   resetMapStyle();
   closeMultiPickMenus("");
+  addBot("조회 중입니다");
   loadInventoryMap(lastCoords).catch((err) => addBotError(err));
 }
 
