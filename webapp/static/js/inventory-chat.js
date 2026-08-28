@@ -1027,8 +1027,13 @@ function applyMapLookup() {
   catalogPicked = true;
   resetMapStyle();
   closeMultiPickMenus("");
-  addBot("조회 중입니다");
-  loadInventoryMap(lastCoords).catch((err) => addBotError(err));
+  addThinking();
+  loadInventoryMap(lastCoords)
+    .then(() => removeThinking())
+    .catch((err) => {
+      removeThinking();
+      addBotError(err);
+    });
 }
 
 function uploadLabel(uploads, dealerId) {
@@ -1186,10 +1191,11 @@ function askWithLocation(text) {
 
 function addThinking() {
   const log = $("chatLog");
+  removeThinking();
   const el = document.createElement("div");
   el.className = "chat-bubble bot thinking";
   el.id = "chatThinking";
-  el.textContent = "찾는 중...";
+  el.textContent = "조회 중입니다";
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
 }
@@ -1233,7 +1239,7 @@ async function sendQuestion(text, coords) {
     }
   } catch (err) {
     removeThinking();
-    addBotError(err);
+    addBot("답을 가져오지 못했습니다. 다시 물어봐 주세요.");
   }
 }
 

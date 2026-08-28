@@ -893,7 +893,76 @@ def inventory_map_points(
     }
 
 
-def _partner_upload_filter(conn, dealer_id: str | None = None) -> tuple[list[str], list]:
+def _parse_money(value) -> float | None:
+    text = re.sub(r"[^\d.\-]", "", str(value or "").strip())
+    if not text or text in {".", "-", "-."}:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def inventory_store_price_sum(conn, store_code: str, dealer_id: str | None = None) -> dict:
+    """한 판매점 재고의 실구매가 합계."""
+    upload_ids, _uploads = _partner_upload_filter(conn, dealer_id)
+    code = re.sub(r"\s+", "", (store_code or "")).upper()
+    empty = {
+        "store_code": code,
+        "name": "",
+        "address": "",
+        "qty": 0,
+        "total_price": 0,
+        "missing_price": 0,
+        "by_model": [],
+    }
+    if not upload_ids or not code:
+        return empty
+    rows = conn.execute(
+        f"""
+        SELECT
+            i.purchase_price,
+            COALESCE(NULLIF(TRIM(i.model_name), ''), NULLIF(TRIM(i.product_short), ''), '미상') AS model_name,
+            s.name AS store_name,
+            i.holder_name,
+            s.address
+        FROM inventory_items i
+        LEFT JOIN stores s
+          ON UPPER(TRIM(COALESCE(s.store_code, ''))) = UPPER(TRIM(COALESCE(i.store_code, '')))
+        WHERE i.upload_id IN ({",".join("?" * len(upload_ids))})
+          AND i.holder_type = 'partner'
+          AND UPPER(REPLACE(TRIM(COALESCE(i.store_code, '')), ' ', '')) = ?
+        """,
+        (*upload_ids, code),
+    ).fetchall()
+    by_model: dict[str, dict] = {}
+    total = 0.0
+    missing = 0
+    name = ""
+    address = ""
+    for row in rows:
+        name = name or (row["store_name"] or row["holder_name"] or "")
+        address = address or (row["address"] or "")
+        model = row["model_name"] or "미상"
+        item = by_model.setdefault(model, {"model": model, "qty": 0, "amount": 0})
+        item["qty"] += 1
+        amount = _parse_money(row["purchase_price"])
+        if amount is None:
+            missing += 1
+        else:
+            item["amount"] += amount
+            total += amount
+    if name and address and name.replace(" ", "") == address.replace(" ", ""):
+        name = ""
+    return {
+        "store_code": code,
+        "name": name or code,
+        "address": address,
+        "qty": len(rows),
+        "total_price": total,
+        "missing_price": missing,
+        "by_model": sorted(by_model.values(), key=lambda m: m["model"]),
+    }
     upload_ids = _latest_upload_ids(conn, dealer_id or None)
     if not upload_ids:
         return [], []

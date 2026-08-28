@@ -14,6 +14,7 @@ from inventory import (
     inventory_map_points,
     inventory_model_breakdown,
     inventory_overview,
+    inventory_store_price_sum,
     normalize_bbox,
 )
 from inventory_llm import interpret_inventory_question, llm_available
@@ -33,6 +34,7 @@ NEAREST_HINTS = (
 )
 HELP_HINTS = ("도움", "뭐 물어", "어떻게", "예시", "help")
 TOTAL_HINTS = ("전체", "총", "다 합", "합계")
+PRICE_HINTS = ("가격", "금액", "실구매가", "실구매")
 AGED_HINTS = ("오래", "묵은", "체화", "30일", "장기보유", "장기 보유", "보유기간", "출고된지")
 COMPARE_HINTS = ("비교", "어디가 더", "더 많", "차이")
 AREA_HINTS = ("이 영역", "이영역", "선택한 영역", "고른 영역", "지도에서 선택", "박스", "사각형")
@@ -115,6 +117,13 @@ def _extract_region(text: str) -> str:
         return ""
     ranked.sort(reverse=True)
     return ranked[0][1]
+
+
+def _extract_store_code(text: str) -> str:
+    match = re.search(r"P\s*\d{4,}", text or "", re.I)
+    if not match:
+        return ""
+    return re.sub(r"\s+", "", match.group(0)).upper()
 
 
 def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None) -> str:
@@ -274,13 +283,21 @@ def parse_inventory_question(text: str, dealers: list[dict] | None = None) -> di
     model = _extract_model(raw)
     region = _extract_region(raw)
     dealer = _extract_dealer(raw, dealers or [])
+    store_code = _extract_store_code(raw)
     extra = []
     if dealer:
         extra.extend([dealer.get("name") or "", dealer.get("dealer_code") or "", "대리점"])
     keyword = _extract_keyword(raw, region, extra)
+    if store_code:
+        keyword = store_code
 
+    has_price = any(h in compact for h in PRICE_HINTS) or (
+        store_code and "합" in compact and "얼마" in compact
+    )
     if any(h in compact for h in HELP_HINTS) or not compact:
         intent = "help"
+    elif store_code and has_price:
+        intent = "price"
     elif any(h in compact for h in AREA_HINTS):
         intent = "bbox"
     elif any(h in compact for h in NEAREST_HINTS):
@@ -305,7 +322,8 @@ def parse_inventory_question(text: str, dealers: list[dict] | None = None) -> di
         "model": model or "ALL",
         "models": [model] if model else [],
         "region": region if intent in {"region", "nearest", "analyze", "aged", "compare", "bbox"} else "",
-        "keyword": keyword if intent in {"keyword", "nearest", "analyze", "aged", "compare", "bbox"} else "",
+        "keyword": keyword if intent in {"keyword", "nearest", "analyze", "aged", "compare", "bbox", "price"} else "",
+        "store_code": store_code,
         "dealer_id": dealer["id"] if dealer else "",
         "dealer_name": dealer.get("name") or "" if dealer else "",
         "raw": raw,
@@ -330,7 +348,9 @@ def ask_inventory(
     nlu = "rules"
     rules = parse_inventory_question(text, dealers)
     parsed = None
-    if llm_available():
+    # 30일/체화처럼 규칙이 이미 확실한 질문은 LLM을 건너뛴다. Render 30초 제한에 걸린다.
+    skip_llm = rules.get("intent") in {"aged", "price"} or bool(rules.get("store_code"))
+    if llm_available() and not skip_llm:
         parsed = interpret_inventory_question(text, dealers)
         if parsed:
             nlu = "llm"
@@ -493,9 +513,37 @@ def _answer_from_parsed(
 
     dealer_id = parsed.get("dealer_id") or None
     region = parsed.get("region") or ""
-    keyword = parsed.get("keyword") or ""
+    keyword = parsed.get("keyword") or parsed.get("store_code") or ""
     aged_only = bool(parsed.get("aged_only"))
     pin_color = (parsed.get("pin_color") or "").strip()
+
+    if intent == "price":
+        code = (parsed.get("store_code") or keyword or "").strip().upper()
+        summary = inventory_store_price_sum(conn, code, dealer_id)
+        data = inventory_map_points(
+            conn,
+            "ALL",
+            keyword=code,
+            dealer_id=dealer_id,
+            pin_color=pin_color,
+        )
+        dealer_scope = f"{parsed['dealer_name']} " if parsed.get("dealer_name") else ""
+        as_of = _as_of(data)
+        as_of_bit = f" 기준일은 {as_of}입니다." if as_of else ""
+        if not summary["qty"]:
+            answer = f"{dealer_scope}{code} 판매점 재고를 찾지 못했습니다.{as_of_bit}"
+        else:
+            name = summary.get("name") or ""
+            label = f"{code} {name}".strip()
+            won = f"{int(round(summary['total_price'])):,}원"
+            answer = f"{dealer_scope}{label} 재고 {summary['qty']}대의 실구매가 합계는 {won}입니다.{as_of_bit}"
+            if summary.get("missing_price"):
+                answer += f" 가격이 없는 {summary['missing_price']}대는 합계에 넣지 않았습니다."
+        data["price_rows"] = summary.get("by_model") or []
+        data["price_total"] = summary.get("total_price") or 0
+        data["price_qty"] = summary.get("qty") or 0
+        return _pack("price", model, answer, data, {}, parsed)
+
     data = inventory_map_points(
         conn,
         model,
@@ -510,9 +558,9 @@ def _answer_from_parsed(
     )
     overview = {}
     all_models: list[dict] = []
-    if intent in {"analyze", "compare", "aged", "total", "bbox"}:
+    if intent in {"analyze", "compare", "total", "bbox"}:
         overview = inventory_overview(conn, dealer_id)
-    if wanted_bbox or keyword or region or intent in {"analyze", "compare", "aged", "bbox"}:
+    if wanted_bbox or keyword or region or intent in {"analyze", "compare", "bbox"}:
         all_models = inventory_model_breakdown(
             conn,
             dealer_id=dealer_id,
@@ -563,7 +611,13 @@ def _answer_from_parsed(
 
     if intent in {"aged", "compare", "analyze", "bbox", "total"}:
         scope = "선택한 영역" if wanted_bbox else (keyword or region or "전체")
-        if data["mapped_qty"] == 0 and not all_models:
+        if intent == "aged":
+            n_stores = len(data.get("points") or [])
+            if n_stores == 0:
+                answer = f"{dealer_scope}30일 이상 재고를 가진 판매점이 없습니다.{as_of_bit}"
+            else:
+                answer = f"{dealer_scope}30일 이상 재고를 가진 판매점 {n_stores}곳을 지도에 표시했습니다.{as_of_bit}"
+        elif data["mapped_qty"] == 0 and not all_models:
             answer = f"{scope}에서 {dealer_scope}판매점 재고가 없습니다.{as_of_bit}"
         else:
             answer = f"{scope} {dealer_scope}재고는 {data['mapped_qty']}대, {len(data['points'])}곳입니다. 숫자는 아래 표입니다.{as_of_bit}"
@@ -607,6 +661,22 @@ def _build_tables(intent: str, parsed: dict, data: dict, overview: dict) -> list
     ov_dealers = [d for d in (overview.get("by_dealer") or []) if _n(d.get("qty"))]
     hold = overview.get("hold_buckets") or {}
 
+    if intent == "price":
+        rows = [
+            [m.get("model") or "", _n(m.get("qty")), int(round(m.get("amount") or 0))]
+            for m in (data.get("price_rows") or [])
+            if _n(m.get("qty"))
+        ]
+        if rows:
+            tables.append(
+                _qty_table(
+                    "기종별 실구매가",
+                    ["기종", "대수", "금액(원)"],
+                    rows,
+                    ["합계", sum(r[1] for r in rows), int(round(data.get("price_total") or 0))],
+                )
+            )
+        return tables
     if intent in {"total", "analyze", "bbox", "keyword", "region", "aged", "compare"} and models:
         rows = [
             [m.get("model") or "", _n(m.get("qty")), _n(m.get("stores")), _n(m.get("aged_qty"))]
