@@ -234,20 +234,36 @@ def parse_inventory_file(filename: str, data: bytes) -> dict[str, Any]:
 
 
 def parse_inventory_xlsx(filename: str, data: bytes) -> dict[str, Any]:
-    wb = load_workbook(BytesIO(data), data_only=True)
+    wb = load_workbook(BytesIO(data), data_only=True, read_only=True)
     try:
         rows: list[dict[str, str]] = []
         as_of = ""
         for ws in wb.worksheets:
-            header_row, headers = _find_inventory_header(ws)
-            if not headers:
-                continue
-            as_of = as_of or _as_of_date(ws)
-            for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-                raw = {}
-                for h, col in headers.items():
-                    val = row[col - 1] if col - 1 < len(row) else None
-                    raw[h] = cell_str(val)
+            headers: dict[str, int] = {}
+            scanned = 0
+            for row in ws.iter_rows(values_only=True):
+                row = row or ()
+                if not headers:
+                    scanned += 1
+                    if not as_of:
+                        for val in row[:20]:
+                            as_of = as_of or _parse_as_of_value(val)
+                    mapping = {}
+                    for idx, value in enumerate(row, start=1):
+                        key = normalize_header(value)
+                        if key:
+                            mapping[key] = idx
+                    if mapping.keys() & HOLDER_CODE_ALIASES and (
+                        mapping.keys() & PRODUCT_SHORT_ALIASES or mapping.keys() & MODEL_ALIASES
+                    ):
+                        headers = mapping
+                    elif scanned >= 20:
+                        break
+                    continue
+                raw = {
+                    h: cell_str(row[col - 1] if col - 1 < len(row) else None)
+                    for h, col in headers.items()
+                }
                 if not any(raw.values()):
                     continue
                 item = _item_from_raw(raw)

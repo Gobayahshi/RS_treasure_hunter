@@ -682,6 +682,37 @@ function addUser(text) {
   addBubble("user", text);
 }
 
+function isTransientError(err) {
+  const msg = String((err && err.message) || err || "");
+  return /응답하지 않습니다|연결하지 못했습니다|찾지 못했|JOB_NOT_FOUND|failed to fetch|networkerror|load failed|502|503|504/i.test(
+    msg
+  );
+}
+
+async function apiQuiet(path, options = {}) {
+  try {
+    return { ok: true, data: await api(path, options) };
+  } catch (err) {
+    return { ok: false, error: err };
+  }
+}
+
+function newUploadJobId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, "");
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}0000000000000000`.slice(0, 32);
+}
+
+function buildUploadForm(file, jobId) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("job_id", jobId);
+  return form;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function setChatNotice(text) {
   const log = $("chatLog");
   if (!log) return;
@@ -690,6 +721,7 @@ function setChatNotice(text) {
     if (el) el.remove();
     return;
   }
+  if (/응답하지 않습니다/.test(text)) text = "파일을 저장하는 중...";
   if (!el) {
     el = document.createElement("div");
     el.id = "chatUploadNotice";
@@ -703,13 +735,29 @@ function setChatNotice(text) {
   log.scrollTop = log.scrollHeight;
 }
 
-async function waitForUploadJob(jobId) {
-  for (let i = 0; i < 300; i++) {
-    const data = await api(`/inventory/excel/status?job_id=${encodeURIComponent(jobId)}`);
-    if (data.message) setChatNotice(data.message);
-    if (data.status === "done") return data.summary || data;
-    if (data.status === "error") throw new Error(data.message || "업로드에 실패했습니다.");
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+async function postInventoryFile(file, jobId) {
+  return apiQuiet("/inventory/excel", { method: "POST", body: buildUploadForm(file, jobId) });
+}
+
+async function waitForUploadJob(jobId, file) {
+  let lastPost = -8;
+  for (let i = 0; i < 360; i++) {
+    const result = await apiQuiet(`/inventory/excel/status?job_id=${encodeURIComponent(jobId)}`);
+    if (result.ok) {
+      const data = result.data || {};
+      if (data.message) setChatNotice(data.message);
+      if (data.status === "done") return data.summary || data;
+      if (data.status === "error") throw new Error(data.message || "업로드에 실패했습니다.");
+    } else if (isTransientError(result.error)) {
+      setChatNotice("파일을 저장하는 중...");
+      if (i - lastPost >= 8) {
+        lastPost = i;
+        await postInventoryFile(file, jobId);
+      }
+    } else {
+      throw result.error;
+    }
+    await sleep(1000);
   }
   throw new Error("저장이 아직 끝나지 않았습니다. 잠시 후 새로고침해 보세요.");
 }
@@ -723,16 +771,24 @@ async function handleInventoryUpload() {
     setChatNotice("xlsx 파일을 선택해주세요.");
     return;
   }
-  const form = new FormData();
-  form.append("file", file);
+  const jobId = newUploadJobId();
   setChatNotice("파일을 받는 중...");
   if (btn) btn.disabled = true;
   try {
-    const started = await api("/inventory/excel", { method: "POST", body: form });
-    const data = started.job_id ? await waitForUploadJob(started.job_id) : started;
+    let started = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const posted = await postInventoryFile(file, jobId);
+      if (posted.ok) {
+        started = posted.data;
+        break;
+      }
+      if (!isTransientError(posted.error)) throw posted.error;
+      setChatNotice("파일을 저장하는 중...");
+      await sleep(1500);
+    }
+    const data = await waitForUploadJob((started && started.job_id) || jobId, file);
     const name = data.dealer_name || inventoryUser.dealer_name || "";
-    const msg = `${name} 재고 현황을 업데이트 했습니다`.trim();
-    setChatNotice(msg);
+    setChatNotice(`${name} 재고 현황을 업데이트 했습니다`.trim());
     catalogPicked = false;
     await loadCatalog();
     if (inventoryUser.can_see_all) loadHqSummary();
@@ -742,7 +798,12 @@ async function handleInventoryUpload() {
       addBotError(mapErr);
     }
   } catch (e) {
-    setChatNotice(friendlyError(e));
+    const msg = friendlyError(e);
+    setChatNotice(
+      /응답하지 않습니다|연결하지 못했습니다/.test(msg)
+        ? "저장이 아직 끝나지 않았습니다. 잠시 후 새로고침해 보세요."
+        : msg
+    );
   } finally {
     if (btn) btn.disabled = false;
   }

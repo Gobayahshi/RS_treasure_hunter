@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 from functools import wraps
@@ -252,10 +253,17 @@ def _scoped_dealer_id():
 
 
 _UPLOAD_JOBS: dict[str, dict] = {}
-_UPLOAD_LOCK = threading.Lock()
+_UPLOAD_LOCK = threading.RLock()
+
+
+def _normalize_upload_job_id(raw: str) -> str:
+    text = re.sub(r"[^0-9a-fA-F]", "", raw or "")
+    return text.lower() if len(text) == 32 else ""
 
 
 def _upload_job_get(job_id: str) -> dict | None:
+    if not job_id:
+        return None
     with _UPLOAD_LOCK:
         job = _UPLOAD_JOBS.get(job_id)
         return dict(job) if job else None
@@ -266,6 +274,18 @@ def _upload_job_set(job_id: str, **fields) -> dict:
         job = _UPLOAD_JOBS.setdefault(job_id, {"job_id": job_id})
         job.update(fields)
         return dict(job)
+
+
+def _upload_job_payload(job: dict) -> dict:
+    payload = {
+        "job_id": job.get("job_id") or "",
+        "status": job.get("status") or "queued",
+        "message": job.get("message") or "",
+    }
+    if job.get("status") == "done" and job.get("summary"):
+        payload.update(job["summary"])
+        payload["summary"] = job["summary"]
+    return payload
 
 
 def _run_inventory_upload(job_id: str, filename: str, data: bytes, dealer: dict | None) -> None:
@@ -1530,26 +1550,41 @@ def import_inventory():
     lower = filename.lower()
     if not (lower.endswith(".xlsx") or lower.endswith(".csv")):
         return jsonify({"error": f"{filename}: .xlsx 또는 .csv 만 지원합니다."}), 400
+    job_id = _normalize_upload_job_id(request.form.get("job_id") or "") or new_id()
+    user = getattr(g, "inventory_user", None) or {}
+    now = time.time()
+    with _UPLOAD_LOCK:
+        current = _UPLOAD_JOBS.get(job_id) or {}
+        status = current.get("status") or ""
+        age = now - float(current.get("started_at") or 0)
+        if status in {"queued", "parsing", "saving", "done"}:
+            return jsonify(_upload_job_payload(dict(current))), 202
+        if status == "receiving" and age < 45:
+            return jsonify(_upload_job_payload(dict(current))), 202
+        job = _UPLOAD_JOBS.setdefault(job_id, {"job_id": job_id})
+        job.update(
+            status="receiving",
+            message="파일을 받는 중...",
+            owner_id=user.get("id") or "",
+            filename=filename,
+            started_at=now,
+        )
     data = upload.read()
     if not data:
+        _upload_job_set(job_id, status="error", message="빈 파일입니다.")
         return jsonify({"error": "빈 파일입니다."}), 400
     dealer = None
     scoped = _scoped_dealer_id()
     if scoped:
-        with db_session() as conn:
-            row = conn.execute("SELECT * FROM dealers WHERE id = ?", (scoped,)).fetchone()
-            if not row:
-                return jsonify({"error": "대리점 정보를 찾지 못했습니다."}), 400
-            dealer = dict(row)
-    job_id = new_id()
-    owner = (getattr(g, "inventory_user", None) or {}).get("id") or ""
-    _upload_job_set(
-        job_id,
-        status="queued",
-        message="업로드를 시작했습니다.",
-        owner_id=owner,
-        filename=filename,
-    )
+        if not user.get("dealer_id"):
+            _upload_job_set(job_id, status="error", message="대리점 정보를 찾지 못했습니다.")
+            return jsonify({"error": "대리점 정보를 찾지 못했습니다."}), 400
+        dealer = {
+            "id": user.get("dealer_id") or "",
+            "dealer_code": user.get("dealer_code") or "",
+            "name": user.get("dealer_name") or "",
+        }
+    _upload_job_set(job_id, status="queued", message="업로드를 시작했습니다.")
     threading.Thread(
         target=_run_inventory_upload,
         args=(job_id, filename, data, dealer),
@@ -1560,25 +1595,12 @@ def import_inventory():
 
 
 @app.route("/api/inventory/excel/status")
-@require_inventory_user
 def inventory_upload_status():
-    job_id = (request.args.get("job_id") or "").strip()
-    job = _upload_job_get(job_id) if job_id else None
+    job_id = _normalize_upload_job_id(request.args.get("job_id") or "")
+    job = _upload_job_get(job_id)
     if not job:
         return jsonify({"error": "JOB_NOT_FOUND", "message": "업로드 상태를 찾지 못했습니다."}), 404
-    owner = job.get("owner_id") or ""
-    me = (getattr(g, "inventory_user", None) or {}).get("id") or ""
-    if owner and me and owner != me:
-        return jsonify({"error": "JOB_FORBIDDEN", "message": "업로드 상태를 찾을 수 없습니다."}), 404
-    payload = {
-        "job_id": job.get("job_id") or job_id,
-        "status": job.get("status") or "queued",
-        "message": job.get("message") or "",
-    }
-    if job.get("status") == "done" and job.get("summary"):
-        payload.update(job["summary"])
-        payload["summary"] = job["summary"]
-    return jsonify(payload)
+    return jsonify(_upload_job_payload(job))
 
 
 @app.route("/api/inventory/map")
