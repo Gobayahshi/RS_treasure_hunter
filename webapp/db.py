@@ -188,11 +188,12 @@ def _columns(conn, table: str) -> set[str]:
 DEALER_PORTAL_ACCOUNTS = (
     ("yuwon", "yuwon", "D14746", "유원"),
     ("frisbee", "frisbee", "D15051", "프리스비"),
+    ("jieun", "jieun", "D13827", "지은"),
 )
 
 
 def _ensure_dealer_portal_accounts(conn) -> None:
-    """유원·프리스비 재고 화면 로그인 계정을 만든다. 이미 있으면 비밀번호는 유지한다."""
+    """테스트 대리점 재고 화면 로그인 계정을 만든다. 이미 있으면 비밀번호는 유지한다."""
     import uuid
     from datetime import datetime
 
@@ -385,22 +386,13 @@ def migrate_schema(conn) -> None:
         )
 
     _ensure_dealer_portal_accounts(conn)
-    try:
-        _sync_stores_from_seed(conn)
-    except Exception:
-        pass
 
 
 def _sync_stores_from_seed(conn) -> None:
-    """배포 DB에 빠진 판매점 좌표를 시드에서 채운다. 기동을 막지 않게 id 기준으로만 붙인다."""
+    """시드의 판매점 마스터(P코드·이름·주소·좌표)를 배포 DB에 맞춘다."""
     seed_path = os.path.abspath(SEED_DB_PATH)
     live_path = os.path.abspath(DB_PATH)
     if not os.path.exists(SEED_DB_PATH) or os.path.normcase(seed_path) == os.path.normcase(live_path):
-        return
-    coded = conn.execute(
-        "SELECT COUNT(*) FROM stores WHERE store_code IS NOT NULL AND TRIM(store_code) != ''"
-    ).fetchone()[0]
-    if coded >= 10000:
         return
     conn.execute("ATTACH DATABASE ? AS seed", (SEED_DB_PATH,))
     try:
@@ -414,43 +406,96 @@ def _sync_stores_from_seed(conn) -> None:
                 SELECT id, dealer_code, name, created_at FROM seed.dealers
                 """
             )
-        if "stores" in seed_tables:
-            conn.execute(
+        if "stores" not in seed_tables:
+            return
+        seed_stores = conn.execute(
+            """
+            SELECT id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
+            FROM seed.stores
+            WHERE TRIM(COALESCE(store_code, '')) != ''
+            """
+        ).fetchall()
+        existing = {
+            (row["store_code"] or "").strip().upper()
+            for row in conn.execute(
+                "SELECT store_code FROM stores WHERE TRIM(COALESCE(store_code, '')) != ''"
+            )
+        }
+        updates = []
+        inserts = []
+        coords = []
+        for row in seed_stores:
+            code = (row["store_code"] or "").strip().upper()
+            if not code:
+                continue
+            if code in existing:
+                updates.append((row["name"], row["address"] or "", row["detail_address"], code))
+                if row["lat"] or row["lng"]:
+                    coords.append((row["lat"], row["lng"], code))
+            else:
+                inserts.append(
+                    (
+                        row["id"],
+                        row["dealer_id"],
+                        row["store_code"],
+                        row["name"],
+                        row["address"] or "",
+                        row["detail_address"],
+                        row["lat"],
+                        row["lng"],
+                        row["created_at"],
+                    )
+                )
+                existing.add(code)
+        if updates:
+            conn.executemany(
                 """
                 UPDATE stores
-                SET store_code = COALESCE(
-                    NULLIF(TRIM(store_code), ''),
-                    (SELECT s.store_code FROM seed.stores s WHERE s.id = stores.id)
-                )
-                WHERE store_code IS NULL OR TRIM(store_code) = ''
-                """
+                SET name = ?,
+                    address = COALESCE(NULLIF(?, ''), address),
+                    detail_address = COALESCE(?, detail_address)
+                WHERE UPPER(TRIM(store_code)) = ?
+                """,
+                updates,
             )
-            conn.execute(
+        if inserts:
+            conn.executemany(
                 """
                 INSERT OR IGNORE INTO stores (
                     id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
-                )
-                SELECT id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
-                FROM seed.stores
-                """
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                inserts,
             )
-            conn.execute(
+        if coords:
+            conn.executemany(
                 """
-                UPDATE stores
-                SET
-                    lat = COALESCE(
-                        NULLIF(lat, 0),
-                        (SELECT s.lat FROM seed.stores s WHERE s.id = stores.id)
-                    ),
-                    lng = COALESCE(
-                        NULLIF(lng, 0),
-                        (SELECT s.lng FROM seed.stores s WHERE s.id = stores.id)
-                    )
-                WHERE lat = 0 AND lng = 0
-                """
+                UPDATE stores SET lat = ?, lng = ?
+                WHERE UPPER(TRIM(store_code)) = ? AND lat = 0 AND lng = 0
+                """,
+                coords,
             )
     finally:
         conn.execute("DETACH DATABASE seed")
+
+
+def start_store_seed_sync() -> None:
+    """Render 포트가 먼저 열리도록 판매점 마스터 동기화는 백그라운드에서 한다."""
+    import threading
+
+    def _run() -> None:
+        conn = None
+        try:
+            conn = get_conn()
+            _sync_stores_from_seed(conn)
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+
+    threading.Thread(target=_run, daemon=True, name="seed-store-sync").start()
 
 
 def init_db() -> None:

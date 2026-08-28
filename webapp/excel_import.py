@@ -236,10 +236,10 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
 
     seen_codes: set[str] = set()
     for i, row in enumerate(buckets.get("stores", []), start=2):
-        store_code = pick(row, STORE_CODE_ALIASES)
+        store_code = pick(row, STORE_CODE_ALIASES).strip().upper()
         address = pick(row, {"기본주소"}) or pick(row, STORE_ADDR_ALIASES)
         detail_address = pick(row, DETAIL_ADDR_ALIASES)
-        name = pick(row, STORE_NAME_ALIASES) or address
+        name = pick(row, STORE_NAME_ALIASES) or address or store_code
         dealer_code = pick(row, DEALER_CODE_ALIASES)
         dealer_name = pick(row, DEALER_NAME_ALIASES)
         lat_raw = pick(row, LAT_ALIASES)
@@ -247,10 +247,6 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
         if not store_code:
             summary["stores"]["skipped"] += 1
             summary["stores"]["errors"].append(f"판매점 {i}행: 판매점코드 필요")
-            continue
-        if not address:
-            summary["stores"]["skipped"] += 1
-            summary["stores"]["errors"].append(f"판매점 {store_code}: 기본주소 필요")
             continue
         if store_code in seen_codes:
             summary["stores"]["duplicate_codes"] += 1
@@ -267,17 +263,11 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
             continue
 
         dealer_id = dealer["id"] if dealer else None
-        existing = conn.execute("SELECT * FROM stores WHERE store_code = ?", (store_code,)).fetchone()
-        if not existing:
-            # 예전에 주소로 한 곳으로 합쳐 둔 행이 있으면, 그중 하나에 이 코드를 붙인다.
-            existing = conn.execute(
-                """
-                SELECT * FROM stores
-                WHERE address = ? AND (store_code IS NULL OR store_code = '')
-                LIMIT 1
-                """,
-                (address,),
-            ).fetchone()
+        # P코드 기준으로만 맞춘다. 같은 기본주소(테크노마트 등)를 한 행으로 합치지 않는다.
+        existing = conn.execute(
+            "SELECT * FROM stores WHERE UPPER(TRIM(COALESCE(store_code, ''))) = ?",
+            (store_code,),
+        ).fetchone()
 
         if existing:
             if lat == 0 and lng == 0:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -125,6 +126,10 @@ def geocode_address(address: str) -> GeocodeResult | None:
     return geocode_nominatim(address)
 
 
+def _address_key(address: str) -> str:
+    return re.sub(r"\s+", "", (address or "").strip())
+
+
 def copy_coords_for_same_address(conn) -> int:
     """같은 기본주소를 쓰는 매장끼리, 이미 있는 좌표를 복사한다."""
     sources = conn.execute(
@@ -135,15 +140,16 @@ def copy_coords_for_same_address(conn) -> int:
     ).fetchall()
     coords: dict[str, tuple[float, float]] = {}
     for row in sources:
-        if row["address"] not in coords:
-            coords[row["address"]] = (row["lat"], row["lng"])
+        key = _address_key(row["address"])
+        if key and key not in coords:
+            coords[key] = (row["lat"], row["lng"])
 
     copied = 0
     missing = conn.execute(
         "SELECT id, address FROM stores WHERE lat = 0 AND lng = 0"
     ).fetchall()
     for row in missing:
-        pair = coords.get(row["address"])
+        pair = coords.get(_address_key(row["address"]))
         if not pair:
             continue
         conn.execute(

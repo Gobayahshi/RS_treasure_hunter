@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from inventory import DEFAULT_MAP_MODELS, REGION_PREFIXES
+from inventory import REGION_PREFIXES
 
 _ENV_LOADED = False
 
@@ -184,8 +184,8 @@ def _normalize_model(raw: str) -> str:
         return ""
     if model.startswith("SM") and not model.startswith("SM-"):
         return "SM-" + model[2:]
-    if not model.startswith("SM-"):
-        return "SM-" + model
+    if model.startswith("SM-") or model.startswith("SM"):
+        return model if model.startswith("SM-") else "SM-" + model[2:]
     return model
 
 
@@ -214,23 +214,24 @@ def interpret_inventory_question(text: str, dealers: list[dict]) -> dict | None:
         "당신은 휴대폰 판매점 재고 질문의 의도를 JSON으로만 추출한다. "
         "설명 없이 JSON 객체만 출력한다. 숫자는 추측하지 않는다.\n"
         "허용 intent: help, nearest, region, keyword, total, analyze, compare, aged, bbox\n"
-        f"지도 기본 기종: {', '.join(DEFAULT_MAP_MODELS)}\n"
+        "기종을 말하지 않으면 models는 빈 배열(전체 기종)이다.\n"
         f"지역: {', '.join(regions)}\n"
         f"대리점: {', '.join(dealer_lines[:40])}\n"
         "스키마: "
         '{"intent":"analyze","models":[],"region":"","keyword":"","dealer_name":"",'
-        '"needs_location":false,"use_map_area":false,"aged_only":false}\n'
+        '"needs_location":false,"use_map_area":false,"aged_only":false,"pin_color":""}\n'
         "규칙:\n"
         "- 가까운/근처/내 위치면 nearest, needs_location=true\n"
         "- 지도에서 고른 영역/이 박스/선택한 영역이면 bbox, use_map_area=true\n"
         "- 시·도만 물으면 region\n"
         "- 김포·강남·매장명 등 구체 지명이면 keyword\n"
-        "- 오래/묵은/체화/30일이면 aged, aged_only=true\n"
+        "- 오래/묵은/체화/30일/보유기간이 길면 aged, aged_only=true\n"
         "- 비교/어디가 더/두 대리점이면 compare\n"
         "- 어디를 먼저/추천/요약/현황/문제면 analyze\n"
         "- 전체 몇 대면 total\n"
         "- 도움이면 help\n"
-        "- models는 사용자가 말한 기종만 SM- 형태로. 없으면 빈 배열.\n"
+        "- models는 사용자가 말한 기종만. 대표상품명·모델명 그대로. 없으면 빈 배열(전체).\n"
+        "- 빨강/주황/파랑 등 색으로 보여달라면 pin_color에 CSS hex(예: #dc2626)\n"
         "- 폴드/F971=SM-F971, A175=SM-A175N, S931=SM-S931N"
     )
     content = _chat(
@@ -285,7 +286,7 @@ def interpret_inventory_question(text: str, dealers: list[dict]) -> dict | None:
     keep_region = region if intent in {"region", "nearest", "analyze", "aged", "compare", "bbox"} else ""
     return {
         "intent": intent,
-        "model": ",".join(models) if models else ",".join(DEFAULT_MAP_MODELS),
+        "model": ",".join(models) if models else "ALL",
         "models": models,
         "region": keep_region,
         "keyword": keep_keyword,
@@ -295,6 +296,7 @@ def interpret_inventory_question(text: str, dealers: list[dict]) -> dict | None:
         "needs_location": bool(data.get("needs_location")) or intent == "nearest",
         "use_map_area": use_map_area,
         "aged_only": aged_only,
+        "pin_color": str(data.get("pin_color") or "").strip(),
         "nlu": "llm",
     }
 

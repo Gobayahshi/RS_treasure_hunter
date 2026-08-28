@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 
 from inventory import (
-    DEFAULT_MAP_MODELS,
     REGION_PREFIXES,
     inventory_map_points,
     inventory_model_breakdown,
@@ -19,7 +18,7 @@ from inventory import (
 )
 from inventory_llm import interpret_inventory_question, llm_available
 
-DEFAULT_MODEL = "SM-F971"
+DEFAULT_MODEL = ""
 
 NEAREST_HINTS = (
     "가까운",
@@ -34,10 +33,39 @@ NEAREST_HINTS = (
 )
 HELP_HINTS = ("도움", "뭐 물어", "어떻게", "예시", "help")
 TOTAL_HINTS = ("전체", "총", "다 합", "합계")
-AGED_HINTS = ("오래", "묵은", "체화", "30일", "장기보유", "장기 보유")
+AGED_HINTS = ("오래", "묵은", "체화", "30일", "장기보유", "장기 보유", "보유기간", "출고된지")
 COMPARE_HINTS = ("비교", "어디가 더", "더 많", "차이")
 AREA_HINTS = ("이 영역", "이영역", "선택한 영역", "고른 영역", "지도에서 선택", "박스", "사각형")
 ANALYZE_HINTS = ("어때", "현황", "요약", "추천", "먼저", "문제", "분석", "어디부터")
+COLOR_HINTS = ("색으로", "색깔", "색상", "칠해", "표시해", "보여줘", "보여 줘")
+
+_PIN_COLORS = (
+    ("빨간색", "#dc2626"),
+    ("빨강색", "#dc2626"),
+    ("빨간", "#dc2626"),
+    ("레드", "#dc2626"),
+    ("red", "#dc2626"),
+    ("주황색", "#ea580c"),
+    ("주황", "#ea580c"),
+    ("오렌지", "#ea580c"),
+    ("노란색", "#ca8a04"),
+    ("노랑색", "#ca8a04"),
+    ("노란", "#ca8a04"),
+    ("초록색", "#16a34a"),
+    ("초록", "#16a34a"),
+    ("녹색", "#16a34a"),
+    ("그린", "#16a34a"),
+    ("파란색", "#2563eb"),
+    ("파랑색", "#2563eb"),
+    ("파란", "#2563eb"),
+    ("블루", "#2563eb"),
+    ("보라색", "#7c3aed"),
+    ("보라", "#7c3aed"),
+    ("핑크색", "#db2777"),
+    ("분홍색", "#db2777"),
+    ("핑크", "#db2777"),
+    ("분홍", "#db2777"),
+)
 
 
 def _compact(text: str) -> str:
@@ -58,7 +86,20 @@ def _extract_model(text: str) -> str:
     match = re.search(r"[AS]\d{3,4}N?", raw)
     if match:
         return f"SM-{match.group(0)}"
-    return DEFAULT_MODEL
+    return ""
+
+
+def _extract_pin_color(text: str) -> str:
+    compact = re.sub(r"\s+", "", text or "").lower()
+    ranked: list[tuple[int, str]] = []
+    for word, color in _PIN_COLORS:
+        key = word.lower()
+        if key and key in compact:
+            ranked.append((len(key), color))
+    if not ranked:
+        return ""
+    ranked.sort(reverse=True)
+    return ranked[0][1]
 
 
 def _extract_region(text: str) -> str:
@@ -260,8 +301,8 @@ def parse_inventory_question(text: str, dealers: list[dict] | None = None) -> di
 
     return {
         "intent": intent,
-        "model": model or ",".join(DEFAULT_MAP_MODELS),
-        "models": [model] if model else list(DEFAULT_MAP_MODELS),
+        "model": model or "ALL",
+        "models": [model] if model else [],
         "region": region if intent in {"region", "nearest", "analyze", "aged", "compare", "bbox"} else "",
         "keyword": keyword if intent in {"keyword", "nearest", "analyze", "aged", "compare", "bbox"} else "",
         "dealer_id": dealer["id"] if dealer else "",
@@ -270,6 +311,7 @@ def parse_inventory_question(text: str, dealers: list[dict] | None = None) -> di
         "needs_location": intent == "nearest",
         "use_map_area": intent == "bbox",
         "aged_only": intent == "aged",
+        "pin_color": _extract_pin_color(raw),
         "nlu": "rules",
     }
 
@@ -292,6 +334,13 @@ def ask_inventory(
             nlu = "llm"
     if not parsed:
         parsed = parse_inventory_question(text, dealers)
+    color = _extract_pin_color(text)
+    if color:
+        parsed["pin_color"] = color
+        compact = _compact(text)
+        if any(h in compact for h in AGED_HINTS) or any(h in compact for h in COLOR_HINTS):
+            if any(h in compact for h in AGED_HINTS):
+                parsed["aged_only"] = True
     parsed["nlu"] = nlu
     if dealer_id:
         scoped = next((d for d in all_dealers if d["id"] == dealer_id), None)
@@ -376,7 +425,7 @@ def _answer_from_parsed(
     elif (parsed.get("model") or "").strip() and (parsed.get("model") or "").strip().lower() not in {"all", "*"}:
         model = parsed.get("model")
     else:
-        model = ",".join(DEFAULT_MAP_MODELS)
+        model = "ALL"
     wanted_bbox = normalize_bbox(bbox)
 
     if intent == "help":
@@ -436,6 +485,7 @@ def _answer_from_parsed(
     region = parsed.get("region") or ""
     keyword = parsed.get("keyword") or ""
     aged_only = bool(parsed.get("aged_only"))
+    pin_color = (parsed.get("pin_color") or "").strip()
     data = inventory_map_points(
         conn,
         model,
@@ -446,6 +496,7 @@ def _answer_from_parsed(
         dealer_id=dealer_id,
         bbox=wanted_bbox,
         aged_only=aged_only,
+        pin_color=pin_color,
     )
     overview = {}
     all_models: list[dict] = []
@@ -468,7 +519,7 @@ def _answer_from_parsed(
     if intent == "nearest":
         nearest = data.get("nearest")
         if not nearest:
-            answer = f"{dealer_scope}{model} 판매점 재고가 없어 가까운 곳을 찾지 못했습니다."
+            answer = f"{dealer_scope}{_model_scope(model)}판매점 재고가 없어 가까운 곳을 찾지 못했습니다."
         else:
             dist = _format_km(nearest.get("distance_meters"))
             addr = " ".join(x for x in [nearest.get("address"), nearest.get("detail_address")] if x)
@@ -478,8 +529,8 @@ def _answer_from_parsed(
                     f"{d['dealer_name']} {d['qty']}대" for d in nearest["dealers"]
                 ) + "."
             answer = (
-                f"지금 위치에서 가장 가까운 {dealer_scope}{model} 보유 판매점은 "
-                f"{nearest['name']}({nearest['store_code']})이고, {nearest['qty']}대 있습니다. "
+                f"지금 위치에서 가장 가까운 {dealer_scope}{_model_scope(model)}보유 판매점은 "
+                f"{nearest.get('store_code') or ''} {nearest.get('name') or ''}이고, {nearest['qty']}대 있습니다. "
                 f"거리는 약 {dist}입니다.{dealers_bit}{_hold_bit(nearest)} {addr}.{as_of_bit}"
             )
         return _pack(intent, model, answer, data, overview, parsed)
@@ -509,7 +560,7 @@ def _answer_from_parsed(
         return _pack(intent, model, answer, data, overview, parsed)
 
     if data["mapped_qty"] == 0:
-        answer = f"{dealer_scope}{model} 판매점 재고가 없습니다.{as_of_bit}"
+        answer = f"{dealer_scope}{_model_scope(model)}판매점 재고가 없습니다.{as_of_bit}"
     else:
         answer = f"{dealer_scope}재고는 {data['mapped_qty']}대, {len(data['points'])}곳입니다. 숫자는 아래 표입니다.{as_of_bit}"
     return _pack("total", model, answer, data, overview, parsed)
@@ -594,8 +645,8 @@ def _build_tables(intent: str, parsed: dict, data: dict, overview: dict) -> list
             aged_stores = sorted(points, key=lambda p: -_n(p.get("aged_qty")))[:8]
         rows = [
             [
-                s.get("name") or s.get("store_code") or "",
                 s.get("store_code") or "",
+                s.get("name") or s.get("store_code") or "",
                 _n(s.get("aged_qty")),
                 _n(s.get("qty")),
                 _n(s.get("max_hold_days")),
@@ -604,16 +655,16 @@ def _build_tables(intent: str, parsed: dict, data: dict, overview: dict) -> list
             if _n(s.get("aged_qty"))
         ]
         if rows:
-            tables.append(_qty_table("체화 많은 매장", ["매장", "코드", "30일+", "전체", "최장(일)"], rows))
+            tables.append(_qty_table("체화 많은 매장", ["P코드", "판매점", "30일+", "전체", "최장(일)"], rows))
     if intent == "nearest" and data.get("nearest"):
         n = data["nearest"]
         tables.append(
             _qty_table(
                 "가장 가까운 매장",
-                ["매장", "코드", "대수", "거리", "30일+"],
+                ["P코드", "판매점", "대수", "거리", "30일+"],
                 [[
-                    n.get("name") or "",
                     n.get("store_code") or "",
+                    n.get("name") or "",
                     _n(n.get("qty")),
                     _format_km(n.get("distance_meters")),
                     _n(n.get("aged_qty")),
@@ -623,22 +674,36 @@ def _build_tables(intent: str, parsed: dict, data: dict, overview: dict) -> list
     elif intent in {"keyword", "region", "bbox"} and len(points) >= 1:
         top = sorted(points, key=lambda p: -_n(p.get("qty")))[:8]
         rows = [
-            [p.get("name") or "", p.get("store_code") or "", _n(p.get("qty")), _n(p.get("aged_qty"))]
+            [p.get("store_code") or "", p.get("name") or "", _n(p.get("qty")), _n(p.get("aged_qty"))]
             for p in top
         ]
-        tables.append(_qty_table("재고 많은 매장", ["매장", "코드", "대수", "30일+"], rows))
+        tables.append(_qty_table("재고 많은 매장", ["P코드", "판매점", "대수", "30일+"], rows))
     return tables
+
+
+def _model_scope(model: str) -> str:
+    text = (model or "").strip()
+    if not text or text.upper() in {"ALL", "*"}:
+        return ""
+    return f"{text} "
 
 
 def _pack(intent: str, model: str, answer: str, data: dict, overview: dict, parsed: dict | None = None) -> dict:
     tables = _build_tables(intent, parsed or {}, data or {}, overview or {})
+    extra = ""
+    if parsed and parsed.get("pin_color"):
+        if parsed.get("aged_only"):
+            extra = " 보유 30일 이상인 판매점을 요청하신 색으로 지도에 표시했습니다."
+        else:
+            extra = " 지도 핀을 요청하신 색으로 표시했습니다."
+    text = (answer or "") + extra
     return {
         "intent": intent,
         "model": model,
         "needs_location": False,
         "needs_area": False,
-        "answer": answer,
-        "speech": answer,
+        "answer": text,
+        "speech": text,
         "map": data,
         "overview": overview,
         "tables": tables,

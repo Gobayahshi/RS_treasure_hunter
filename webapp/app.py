@@ -19,13 +19,18 @@ from confidence import (
     evaluate_visit_session,
     haversine_distance_meters,
 )
-from db import db_session, init_db
+from db import db_session, init_db, start_store_seed_sync
 from excel_import import build_stats_xlsx, build_template_xlsx, parse_uploads, upsert_masters
 from geocode import geocode_missing_stores
 from inventory import (
+    inventory_dealer_roster,
     inventory_map_points,
     inventory_model_breakdown,
+    inventory_model_catalog,
+    inventory_overview,
+    is_inventory_csv,
     is_inventory_workbook,
+    parse_inventory_file,
     parse_inventory_xlsx,
     replace_inventory,
 )
@@ -56,6 +61,7 @@ app.wsgi_app = _PrefixMiddleware(app.wsgi_app, CONTEXT_PATH)
 _LOG_DIR = Path("/tmp") if CONTEXT_PATH else Path(__file__).resolve().parent
 GEOCODE_LOG_PATH = _LOG_DIR / "geocode_progress.log"
 init_db()
+start_store_seed_sync()
 
 
 def _inject_app_base(html: str) -> str:
@@ -492,6 +498,29 @@ def inventory_logout():
 @require_inventory_user
 def inventory_me():
     return jsonify(_user_payload(g.inventory_user))
+
+
+@app.route("/api/inventory/summary")
+@require_inventory_user
+def inventory_summary():
+    with db_session() as conn:
+        scoped = _scoped_dealer_id() or None
+        data = inventory_overview(conn, scoped)
+        if not scoped:
+            roster = inventory_dealer_roster(conn)
+            data["dealers"] = roster["dealers"]
+            data["dealer_count"] = roster["dealer_count"]
+            data["uploaded_count"] = roster["uploaded_count"]
+            data["pending_count"] = roster["pending_count"]
+        return jsonify(data)
+
+
+@app.route("/api/inventory/catalog")
+@require_inventory_user
+def inventory_catalog():
+    dealer_id = _scoped_dealer_id() or (request.args.get("dealer_id") or "").strip() or None
+    with db_session() as conn:
+        return jsonify(inventory_model_catalog(conn, dealer_id))
 
 
 @app.route("/api/admin/change-password", methods=["POST"])
@@ -1436,13 +1465,17 @@ def import_inventory():
     if not upload:
         return jsonify({"error": "재고현황 xlsx 파일을 올려주세요."}), 400
     filename = upload.filename or "inventory.xlsx"
-    if not filename.lower().endswith(".xlsx"):
-        return jsonify({"error": f"{filename}: .xlsx 만 지원합니다."}), 400
+    lower = filename.lower()
+    if not (lower.endswith(".xlsx") or lower.endswith(".csv")):
+        return jsonify({"error": f"{filename}: .xlsx 또는 .csv 만 지원합니다."}), 400
     data = upload.read()
     try:
-        if not is_inventory_workbook(data):
+        if lower.endswith(".csv"):
+            if not is_inventory_csv(data):
+                return jsonify({"error": "재고현황 파일로 보이지 않습니다. 보유처매장코드/대표상품명 열이 필요합니다."}), 400
+        elif not is_inventory_workbook(data):
             return jsonify({"error": "재고현황 파일로 보이지 않습니다. 보유처매장코드/대표상품명 열이 필요합니다."}), 400
-        parsed = parse_inventory_xlsx(filename, data)
+        parsed = parse_inventory_file(filename, data)
     except Exception as exc:
         return jsonify({"error": f"재고 엑셀을 읽지 못했습니다: {exc}"}), 400
     if not parsed["rows"]:
@@ -1472,6 +1505,9 @@ def inventory_map():
     dealer_id = _scoped_dealer_id() or (request.args.get("dealer_id") or "").strip()
     dealer_code = (request.args.get("dealer") or request.args.get("dealer_code") or "").strip()
     aged_only = (request.args.get("aged_only") or "").strip() in {"1", "true", "yes"}
+    product_short = (request.args.get("product_short") or "").strip()
+    model_name = (request.args.get("model_name") or "").strip()
+    pin_color = (request.args.get("pin_color") or "").strip()
     lat = lng = None
     bbox = None
     radius_km = None
@@ -1514,6 +1550,9 @@ def inventory_map():
             bbox=bbox,
             aged_only=aged_only,
             radius_km=radius_km,
+            product_short=product_short,
+            model_name=model_name,
+            pin_color=pin_color,
         )
         if bbox:
             data["area_model_totals"] = inventory_model_breakdown(
@@ -1542,6 +1581,7 @@ def inventory_ask():
         except (TypeError, ValueError):
             return jsonify({"error": "lat, lng는 숫자여야 합니다."}), 400
     bbox = body.get("bbox")
+    dealer_id = _scoped_dealer_id() or (body.get("dealer_id") or "").strip() or None
     with db_session() as conn:
         result = ask_inventory(
             conn,
@@ -1549,7 +1589,7 @@ def inventory_ask():
             lat=lat,
             lng=lng,
             bbox=bbox,
-            dealer_id=_scoped_dealer_id() or None,
+            dealer_id=dealer_id,
         )
     return jsonify(result)
 

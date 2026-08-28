@@ -3,6 +3,9 @@ const TOKEN_KEY = "rs_inventory_token";
 let chatMap = null;
 let chatMarkers = null;
 let chatMeMarker = null;
+let lastChatMapData = null;
+let lastChatOrigin = null;
+let storeLabelsOn = null;
 let pendingQuestion = "";
 let areaMode = false;
 let areaDrawing = false;
@@ -19,7 +22,13 @@ let inventoryUser = {
   can_see_all: true,
 };
 let lastCoords = null;
-const MAP_MODELS = "SM-F971,SM-A175N,SM-S931N";
+let hqDealerId = "";
+let modelCatalog = [];
+let mapProductShort = "";
+let mapModelName = "";
+let mapPinColor = "";
+let mapAgedOnly = false;
+let catalogPicked = false;
 
 function $(id) {
   return document.getElementById(id);
@@ -80,6 +89,11 @@ function showLoggedOut() {
   $("screen-chat-login").classList.remove("hidden");
   $("chat-app").classList.add("hidden");
   $("chatNav").classList.add("hidden");
+  const asOf = $("asOfBadge");
+  if (asOf) {
+    asOf.textContent = "";
+    asOf.classList.add("hidden");
+  }
 }
 
 function showLoggedIn(user) {
@@ -91,29 +105,124 @@ function showLoggedIn(user) {
   $("chatUser").textContent = name ? `${name}` : "";
   const adminLink = $("chatAdminLink");
   if (adminLink) adminLink.classList.toggle("hidden", !inventoryUser.can_see_all);
+  const hqPanel = $("hqPanel");
+  if (hqPanel) hqPanel.classList.toggle("hidden", !inventoryUser.can_see_all);
+  const sktWrap = $("sktDealerWrap");
+  if (sktWrap) sktWrap.classList.toggle("hidden", !inventoryUser.can_see_all);
+  $("chat-app").classList.toggle("is-hq", !!inventoryUser.can_see_all);
   document.querySelectorAll("[data-all-dealers]").forEach((el) => {
     el.classList.toggle("hidden", !inventoryUser.can_see_all);
   });
+  if (inventoryUser.can_see_all) loadHqSummary();
+  const ready = loadCatalog();
   ensureChatMap();
+  return ready;
 }
 
 function stockPinColor(point) {
+  if (mapPinColor) return mapPinColor;
   const days = point && point.max_hold_days;
   if (days != null && days >= 30) return "#dc2626";
   if (days != null && days >= 15) return "#d97706";
   return "#2563eb";
 }
 
-function stockIcon(point, nearest = false) {
+function storeCaptionHtml(point) {
+  const stores = (point && point.stores) || [point];
+  const first = stores[0] || {};
+  const code = escHtml((first.store_code || point.store_code || "").trim());
+  const name = escHtml((first.name || point.name || "").trim());
+  const extra = stores.length > 1 ? ` 외 ${stores.length - 1}곳` : "";
+  return `<span class="stock-code">${code}</span> ${name}${extra}`;
+}
+
+function storeCaptionText(point) {
+  const stores = (point && point.stores) || [point];
+  const first = stores[0] || {};
+  const code = (first.store_code || point.store_code || "").trim();
+  const name = (first.name || point.name || "").trim();
+  const label = [code, name].filter(Boolean).join(" ");
+  if (stores.length > 1) return `${label} 외 ${stores.length - 1}곳`;
+  return label;
+}
+
+function clusterMapPoints(points) {
+  const groups = new Map();
+  for (const p of points || []) {
+    const addr = String(p.address || "").replace(/\s+/g, "");
+    const key = addr || `${Number(p.lat).toFixed(5)},${Number(p.lng).toFixed(5)}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        lat: p.lat,
+        lng: p.lng,
+        address: p.address || "",
+        detail_address: p.detail_address || "",
+        region: p.region,
+        qty: 0,
+        aged_qty: 0,
+        max_hold_days: null,
+        shared: false,
+        stores: [],
+        dealers: [],
+        models: [],
+        distance_meters: p.distance_meters,
+      };
+      groups.set(key, g);
+    }
+    g.stores.push(p);
+    g.qty += p.qty || 0;
+    g.aged_qty += p.aged_qty || 0;
+    if (p.max_hold_days != null) {
+      g.max_hold_days = g.max_hold_days == null ? p.max_hold_days : Math.max(g.max_hold_days, p.max_hold_days);
+    }
+    if (p.shared) g.shared = true;
+    if (p.distance_meters != null) {
+      g.distance_meters = g.distance_meters == null
+        ? p.distance_meters
+        : Math.min(g.distance_meters, p.distance_meters);
+    }
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    g.stores.sort((a, b) => (b.qty || 0) - (a.qty || 0) || String(a.store_code).localeCompare(String(b.store_code)));
+    g.store_code = g.stores[0].store_code;
+    g.name = g.stores[0].name;
+    const dealerMap = new Map();
+    const modelMap = new Map();
+    for (const s of g.stores) {
+      for (const d of s.dealers || []) {
+        const key = d.dealer_id || d.dealer_code || d.dealer_name;
+        const prev = dealerMap.get(key) || { ...d, qty: 0, aged_qty: 0 };
+        prev.qty += d.qty || 0;
+        prev.aged_qty += d.aged_qty || 0;
+        dealerMap.set(key, prev);
+      }
+      for (const m of s.models || []) {
+        modelMap.set(m.model, (modelMap.get(m.model) || 0) + (m.qty || 0));
+      }
+    }
+    g.dealers = [...dealerMap.values()].sort((a, b) => (b.qty || 0) - (a.qty || 0));
+    g.models = [...modelMap.entries()]
+      .map(([model, qty]) => ({ model, qty }))
+      .sort((a, b) => b.qty - a.qty);
+    if (g.dealers.length > 1) g.shared = true;
+    out.push(g);
+  }
+  return out;
+}
+
+function stockIcon(point, nearest = false, showLabel = true) {
   const qty = typeof point === "number" ? point : (point && point.qty) || 0;
   const shared = point && point.shared;
   const cls = `stock-pin${nearest ? " nearest" : ""}${shared ? " shared" : ""}`;
+  const caption = showLabel && typeof point === "object" && point ? storeCaptionHtml(point) : "";
   return L.divIcon({
     className: "stock-marker",
-    html: `<div class="${cls}" style="background:${stockPinColor(point)}">${qty}</div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-    popupAnchor: [0, -16],
+    html: `<div class="stock-marker-inner"><div class="${cls}" style="background:${stockPinColor(point)}">${qty}</div>${caption ? `<div class="stock-caption">${caption}</div>` : ""}</div>`,
+    iconSize: showLabel ? [220, 36] : [32, 32],
+    iconAnchor: [16, showLabel ? 18 : 16],
+    popupAnchor: [0, -18],
   });
 }
 
@@ -133,6 +242,12 @@ function ensureChatMap() {
     attribution: "&copy; OpenStreetMap",
   }).addTo(chatMap);
   chatMarkers = L.layerGroup().addTo(chatMap);
+  chatMap.on("zoomend", () => {
+    const show = chatMap.getZoom() >= 12;
+    if (show !== storeLabelsOn && lastChatMapData) {
+      renderChatMap(lastChatMapData, lastChatOrigin, true);
+    }
+  });
   bindAreaDraw(chatMap);
   setTimeout(() => chatMap.invalidateSize(), 120);
   return chatMap;
@@ -263,14 +378,13 @@ function renderAreaTable(data) {
 
 async function applyAreaBounds(bbox) {
   try {
-    const params = new URLSearchParams({
-      model: MAP_MODELS,
-      south: String(bbox.south),
-      west: String(bbox.west),
-      north: String(bbox.north),
-      east: String(bbox.east),
-    });
+    const params = mapQueryParams();
+    params.set("south", String(bbox.south));
+    params.set("west", String(bbox.west));
+    params.set("north", String(bbox.north));
+    params.set("east", String(bbox.east));
     const data = await api(`/inventory/map?${params}`);
+    applyMapMeta(data);
     renderChatMap(data);
     renderAreaTable(data);
   } catch (err) {
@@ -278,36 +392,47 @@ async function applyAreaBounds(bbox) {
   }
 }
 
-function renderChatMap(data, origin) {
+function renderChatMap(data, origin, keepView = false) {
   const map = ensureChatMap();
   if (!map || !chatMarkers) return;
+  lastChatMapData = data;
+  lastChatOrigin = origin;
   chatMarkers.clearLayers();
   if (chatMeMarker) {
     map.removeLayer(chatMeMarker);
     chatMeMarker = null;
   }
-  const points = (data && data.points) || [];
+  const points = clusterMapPoints((data && data.points) || []);
   const nearestCode = data && data.nearest && data.nearest.store_code;
+  const showLabel = map.getZoom() >= 12;
+  storeLabelsOn = showLabel;
   const bounds = [];
   let nearestMarker = null;
   for (const p of points) {
     if (p.lat == null || p.lng == null) continue;
-    const isNearest = nearestCode && p.store_code === nearestCode;
-    const marker = L.marker([p.lat, p.lng], { icon: stockIcon(p, isNearest) });
+    const isNearest = nearestCode && (p.stores || []).some((s) => s.store_code === nearestCode);
+    const marker = L.marker([p.lat, p.lng], { icon: stockIcon(p, isNearest, showLabel) });
     const dist = p.distance_meters != null ? `<div class="distance">${formatKm(p.distance_meters)}</div>` : "";
     const hold = p.max_hold_days != null
       ? ` · 최장 ${p.max_hold_days}일${p.aged_qty ? ` · 30일+ ${p.aged_qty}대` : ""}`
       : "";
     const dealers = (p.dealers || []).map((d) => `${escHtml(d.dealer_name)} ${d.qty}대`).join(" · ");
     const models = (p.models || []).map((m) => `${escHtml(m.model)} ${m.qty}대`).join(" · ");
-    const modelLine = models || `${escHtml((data && data.model) || "")} ${p.qty}대`;
+    const storeRows = (p.stores || [p]).map((s) => {
+      const sHold = s.max_hold_days != null ? ` · 최장 ${s.max_hold_days}일` : "";
+      return `<div class="store-line"><span class="store-code">${escHtml(s.store_code)}</span> ${escHtml(s.name)} <span class="muted">${s.qty}대${sHold}</span></div>`;
+    }).join("");
     marker.bindPopup(
-      `<div class="map-popup"><div class="store-name">${escHtml(p.name)} (${escHtml(p.store_code)})</div>
+      `<div class="map-popup">
+      <div class="store-list">${storeRows}</div>
       <div class="muted small">${escHtml(p.address || "")}</div>
       <div class="distance">${p.qty}대${hold}</div>
-      ${models ? `<div class="muted small">${modelLine}</div>` : ""}
+      ${models ? `<div class="muted small">${models}</div>` : ""}
       ${dealers ? `<div class="muted small">${dealers}</div>` : ""}${dist}</div>`
     );
+    if (!showLabel) {
+      marker.bindTooltip(storeCaptionText(p), { direction: "right", offset: [16, 0], opacity: 0.95 });
+    }
     marker.addTo(chatMarkers);
     bounds.push([p.lat, p.lng]);
     if (isNearest) nearestMarker = marker;
@@ -323,6 +448,10 @@ function renderChatMap(data, origin) {
       .bindPopup("내 위치")
       .addTo(map);
     bounds.push([origin.lat, origin.lng]);
+  }
+  if (keepView) {
+    setTimeout(() => map.invalidateSize(), 80);
+    return;
   }
   if (origin && bounds.length) {
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
@@ -433,6 +562,9 @@ async function handleInventoryUpload() {
     addBot(
       `${name} 재고를 올렸습니다. ${Number(data.row_count || 0).toLocaleString("ko-KR")}행이며, 이 대리점의 이전 재고는 지웠습니다.`
     );
+    catalogPicked = false;
+    await loadCatalog();
+    if (inventoryUser.can_see_all) loadHqSummary();
     const mapData = await loadInventoryMap(lastCoords);
     addBot(describeMap(mapData, lastCoords));
   } catch (e) {
@@ -464,7 +596,7 @@ async function handleLogin() {
     });
     setToken(data.token);
     $("chatPassword").value = "";
-    showLoggedIn(data);
+    await showLoggedIn(data);
     greet();
   } catch (e) {
     err.textContent = e.message || "로그인에 실패했습니다.";
@@ -487,26 +619,251 @@ function greet() {
   const dealer = inventoryUser.dealer_name;
   if (dealer && !inventoryUser.can_see_all) {
     addBot(
-      `${dealer} 재고만 보여 드립니다. 엑셀을 올리면 이전 재고는 지우고 이번 파일만 남습니다. 위치 권한을 허용하면 근처 판매점 재고를 지도에 보여 드립니다.`
+      `${dealer} 재고만 보여 드립니다. 엑셀을 올리면 이전 재고는 지우고 이번 파일만 남습니다. 위 드롭다운에서 대표상품명·모델명을 고르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다.`
     );
   } else {
     addBot(
-      "재고 현황을 보고 답합니다. 위치 권한을 허용하면 근처 재고부터 보여 드립니다. 지도에서 「영역 선택」으로 사각형을 그리면 그 안의 기종별 대수도 계산합니다."
+      "올린 대리점 재고를 함께 봅니다. 왼쪽에서 대리점을 고를 수 있고, 위 드롭다운에서 대표상품명·모델명을 고르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다."
     );
   }
   requestMyLocation({ announce: true });
 }
 
 async function loadInventoryMap(coords) {
-  const params = new URLSearchParams({ model: MAP_MODELS });
+  const params = mapQueryParams(coords);
+  const data = await api(`/inventory/map?${params}`);
+  applyMapMeta(data);
+  renderChatMap(data, coords || null);
+  return data;
+}
+
+function mapQueryParams(coords) {
+  const params = new URLSearchParams();
+  if (mapProductShort) params.set("product_short", mapProductShort);
+  if (mapModelName) params.set("model_name", mapModelName);
+  if (!mapProductShort && !mapModelName) params.set("model", "ALL");
+  if (mapAgedOnly) params.set("aged_only", "1");
+  if (mapPinColor) params.set("pin_color", mapPinColor);
   if (coords) {
     params.set("lat", String(coords.lat));
     params.set("lng", String(coords.lng));
     params.set("radius_km", "20");
   }
-  const data = await api(`/inventory/map?${params}`);
-  renderChatMap(data, coords || null);
-  return data;
+  if (inventoryUser.can_see_all && hqDealerId) params.set("dealer_id", hqDealerId);
+  return params;
+}
+
+function applyMapMeta(data) {
+  if (!data) return;
+  if (Object.prototype.hasOwnProperty.call(data, "pin_color")) {
+    mapPinColor = data.pin_color || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(data, "aged_only")) {
+    mapAgedOnly = !!data.aged_only;
+  }
+  if (data.as_of_date || (data.uploads && data.uploads.length)) renderAsOf(data);
+}
+
+function formatAsOf(raw) {
+  return String(raw || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((day) => (day.length === 8 ? `${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}` : day))
+    .join(" · ");
+}
+
+function renderAsOf(data) {
+  const el = $("asOfBadge");
+  if (!el) return;
+  const uploads = data.uploads || [];
+  let text = "";
+  if (uploads.length > 1) {
+    text = uploads
+      .map((u) => {
+        const name = u.dealer_name || "";
+        const day = formatAsOf(u.as_of_date);
+        if (name && day) return `${name} ${day}`;
+        return day || name;
+      })
+      .filter(Boolean)
+      .join(" · ");
+  } else {
+    text = formatAsOf((uploads[0] && uploads[0].as_of_date) || data.as_of_date);
+  }
+  el.textContent = text ? `기준일 ${text}` : "";
+  el.classList.toggle("hidden", !el.textContent);
+}
+
+async function loadCatalog() {
+  const qs = inventoryUser.can_see_all && hqDealerId ? `?dealer_id=${encodeURIComponent(hqDealerId)}` : "";
+  try {
+    const data = await api(`/inventory/catalog${qs}`);
+    modelCatalog = data.products || [];
+    renderAsOf(data);
+    fillProductSelect();
+  } catch (_) {
+    modelCatalog = [];
+    fillProductSelect();
+  }
+}
+
+function fillProductSelect() {
+  const sel = $("productShortSelect");
+  if (!sel) return;
+  const prev = mapProductShort;
+  sel.innerHTML = `<option value="">대표상품명 선택</option>`;
+  for (const p of modelCatalog) {
+    const opt = document.createElement("option");
+    opt.value = p.product_short;
+    opt.textContent = `${p.product_short} (${Number(p.qty || 0).toLocaleString("ko-KR")}대)`;
+    sel.appendChild(opt);
+  }
+  if (!catalogPicked && !prev && modelCatalog[0]) {
+    mapProductShort = modelCatalog[0].product_short;
+    catalogPicked = true;
+  } else if (prev && [...sel.options].some((o) => o.value === prev)) {
+    mapProductShort = prev;
+  } else if (prev && ![...sel.options].some((o) => o.value === prev)) {
+    mapProductShort = "";
+    mapModelName = "";
+  }
+  sel.value = mapProductShort;
+  fillModelSelect();
+}
+
+function fillModelSelect() {
+  const sel = $("modelNameSelect");
+  if (!sel) return;
+  const product = modelCatalog.find((p) => p.product_short === mapProductShort);
+  sel.innerHTML = `<option value="">해당 기종 전체</option>`;
+  sel.disabled = !product;
+  if (!product) {
+    mapModelName = "";
+    return;
+  }
+  for (const m of product.models || []) {
+    const opt = document.createElement("option");
+    opt.value = m.model_name;
+    opt.textContent = `${m.model_name} (${Number(m.qty || 0).toLocaleString("ko-KR")}대)`;
+    sel.appendChild(opt);
+  }
+  if (mapModelName && [...sel.options].some((o) => o.value === mapModelName)) {
+    sel.value = mapModelName;
+  } else {
+    mapModelName = "";
+    sel.value = "";
+  }
+}
+
+function resetMapStyle() {
+  mapPinColor = "";
+  mapAgedOnly = false;
+}
+
+function onProductShortChange() {
+  mapProductShort = $("productShortSelect").value || "";
+  mapModelName = "";
+  catalogPicked = true;
+  resetMapStyle();
+  fillModelSelect();
+  loadInventoryMap(lastCoords).then((data) => addBot(describeMap(data, lastCoords))).catch((err) => addBot(String(err.message || err)));
+}
+
+function onModelNameChange() {
+  mapModelName = $("modelNameSelect").value || "";
+  catalogPicked = true;
+  resetMapStyle();
+  loadInventoryMap(lastCoords).then((data) => addBot(describeMap(data, lastCoords))).catch((err) => addBot(String(err.message || err)));
+}
+
+function uploadLabel(uploads, dealerId) {
+  const rows = (uploads || []).filter((u) => !dealerId || u.dealer_id === dealerId);
+  if (!rows.length) return "아직 없음";
+  const u = rows[0];
+  const qty = Number(u.row_count || 0).toLocaleString("ko-KR");
+  return `${qty}행${u.as_of_date ? ` · ${u.as_of_date}` : ""}`;
+}
+
+async function loadHqSummary() {
+  const box = $("hqDealerList");
+  const allMeta = $("hqAllMeta");
+  const status = $("hqStatus");
+  if (!box || !inventoryUser.can_see_all) return;
+  try {
+    const data = await api("/inventory/summary");
+    const dealers = data.dealers || data.by_dealer || [];
+    const uploads = data.uploads || [];
+    if (allMeta) {
+      allMeta.textContent = `${Number(data.total_qty || 0).toLocaleString("ko-KR")}대 · ${Number(data.store_count || 0).toLocaleString("ko-KR")}곳`;
+    }
+    if (status) {
+      status.textContent = `등록 ${Number(data.dealer_count || dealers.length || 0)} · 업로드 ${Number(data.uploaded_count || dealers.filter((d) => d.has_upload).length)}`;
+    }
+    const q = (($("hqSearch") && $("hqSearch").value) || "").trim().toLowerCase();
+    const filtered = dealers.filter((d) => {
+      if (!q) return true;
+      const blob = `${d.dealer_name || ""} ${d.dealer_code || ""}`.toLowerCase();
+      return blob.includes(q);
+    });
+    box.innerHTML = "";
+    for (const d of filtered) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `hq-row${hqDealerId === d.dealer_id ? " active" : ""}`;
+      btn.setAttribute("data-dealer", d.dealer_id || "");
+      const aged = Number(d.aged_qty || 0);
+      const uploaded = d.has_upload ? uploadLabel(uploads, d.dealer_id) : "아직 없음";
+      btn.innerHTML = `<strong>${escHtml(d.dealer_name || "미지정")}</strong>
+        <span class="muted small">${Number(d.qty || 0).toLocaleString("ko-KR")}대 · ${Number(d.stores || 0)}곳${aged ? ` · 30일+ ${aged.toLocaleString("ko-KR")}` : ""}</span>
+        <span class="muted small">${escHtml(uploaded)}</span>`;
+      box.appendChild(btn);
+    }
+    if (!filtered.length) {
+      box.innerHTML = `<p class="muted small">해당하는 대리점이 없습니다.</p>`;
+    }
+    const allBtn = $("hqAllBtn");
+    if (allBtn) allBtn.classList.toggle("active", !hqDealerId);
+    fillSktDealerSelect(dealers);
+  } catch (_) {
+    box.textContent = "요약을 불러오지 못했습니다.";
+  }
+}
+
+function fillSktDealerSelect(dealers) {
+  const sel = $("sktDealerSelect");
+  if (!sel) return;
+  sel.innerHTML = `<option value="">전체 대리점</option>`;
+  for (const d of dealers) {
+    const opt = document.createElement("option");
+    opt.value = d.dealer_id || "";
+    const qty = Number(d.qty || 0).toLocaleString("ko-KR");
+    opt.textContent = `${d.dealer_name || "미지정"}${d.dealer_code ? ` (${d.dealer_code})` : ""} · ${qty}대`;
+    sel.appendChild(opt);
+  }
+  sel.value = hqDealerId;
+}
+
+function applyHqDealer(dealerId) {
+  hqDealerId = dealerId || "";
+  const sel = $("sktDealerSelect");
+  if (sel) sel.value = hqDealerId;
+  document.querySelectorAll("#hqPanel [data-dealer]").forEach((el) => {
+    el.classList.toggle("active", (el.getAttribute("data-dealer") || "") === hqDealerId);
+  });
+  catalogPicked = false;
+  return loadCatalog()
+    .then(() => loadInventoryMap(lastCoords))
+    .then((data) => addBot(describeMap(data, lastCoords)))
+    .catch((err) => addBot(String(err.message || err)));
+}
+
+function handleHqClick(ev) {
+  const filterBtn = ev.target.closest("[data-hq-filter]");
+  if (filterBtn) return;
+  const btn = ev.target.closest("[data-dealer]");
+  if (!btn) return;
+  applyHqDealer(btn.getAttribute("data-dealer") || "");
 }
 
 function describeMap(data, coords) {
@@ -546,7 +903,7 @@ async function requestMyLocation(options = {}) {
           const nationwide = await loadInventoryMap(null);
           renderChatMap(nationwide, lastCoords);
           if (announce) {
-            addBot("근처 20km 안에서는 표시할 재고가 없어, 같은 3개 기종을 전국으로 보여 드립니다.");
+            addBot("근처 20km 안에서는 표시할 재고가 없어, 같은 기종을 전국으로 보여 드립니다.");
             addBot(describeMap(nationwide, lastCoords));
           }
           return;
@@ -624,6 +981,7 @@ async function sendQuestion(text, coords) {
       body.lng = coords.lng;
     }
     if (areaBounds) body.bbox = areaBounds;
+    if (inventoryUser.can_see_all && hqDealerId) body.dealer_id = hqDealerId;
     const data = await api("/inventory/ask", {
       method: "POST",
       body: JSON.stringify(body),
@@ -640,6 +998,8 @@ async function sendQuestion(text, coords) {
     }
     addBot(data.answer || "답을 만들지 못했습니다.", data.tables);
     if (data.map) {
+      mapPinColor = data.map.pin_color || "";
+      mapAgedOnly = !!data.map.aged_only;
       renderChatMap(data.map, coords || null);
       if (areaBounds || (data.map && data.map.bbox)) renderAreaTable(data.map);
     }
@@ -664,7 +1024,7 @@ async function restore() {
   }
   try {
     const me = await api("/inventory/me");
-    showLoggedIn(me);
+    await showLoggedIn(me);
     greet();
   } catch (_) {
     setToken("");
@@ -676,7 +1036,23 @@ document.addEventListener("DOMContentLoaded", () => {
   $("chatLoginBtn").addEventListener("click", handleLogin);
   $("pickYuwon").addEventListener("click", (e) => pickDealer("yuwon", e.currentTarget));
   $("pickFrisbee").addEventListener("click", (e) => pickDealer("frisbee", e.currentTarget));
+  const pickJieun = $("pickJieun");
+  if (pickJieun) pickJieun.addEventListener("click", (e) => pickDealer("jieun", e.currentTarget));
+  const pickAdmin = $("pickAdmin");
+  if (pickAdmin) pickAdmin.addEventListener("click", (e) => pickDealer("admin", e.currentTarget));
   $("inventoryUploadBtn").addEventListener("click", handleInventoryUpload);
+  const productSel = $("productShortSelect");
+  const modelSel = $("modelNameSelect");
+  if (productSel) productSel.addEventListener("change", onProductShortChange);
+  if (modelSel) modelSel.addEventListener("change", onModelNameChange);
+  const hqPanel = $("hqPanel");
+  if (hqPanel) hqPanel.addEventListener("click", handleHqClick);
+  const hqSearch = $("hqSearch");
+  if (hqSearch) hqSearch.addEventListener("input", () => loadHqSummary());
+  const sktSel = $("sktDealerSelect");
+  if (sktSel) {
+    sktSel.addEventListener("change", () => applyHqDealer(sktSel.value || ""));
+  }
   $("chatPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleLogin();
   });

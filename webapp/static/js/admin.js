@@ -167,12 +167,15 @@ function stockIcon(point, nearest = false) {
   const qty = typeof point === "number" ? point : (point && point.qty) || 0;
   const shared = point && point.shared;
   const cls = `stock-pin${nearest ? " nearest" : ""}${shared ? " shared" : ""}`;
+  const code = escHtml((point && point.store_code) || "");
+  const name = escHtml((point && point.name) || "");
+  const caption = code || name ? `<div class="stock-caption"><span class="stock-code">${code}</span> ${name}</div>` : "";
   return L.divIcon({
     className: "stock-marker",
-    html: `<div class="${cls}" style="background:${stockPinColor(point)}">${qty}</div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-    popupAnchor: [0, -16],
+    html: `<div class="stock-marker-inner"><div class="${cls}" style="background:${stockPinColor(point)}">${qty}</div>${caption}</div>`,
+    iconSize: [220, 36],
+    iconAnchor: [16, 18],
+    popupAnchor: [0, -18],
   });
 }
 
@@ -246,7 +249,7 @@ function renderInventoryMap(data) {
       .join(" · ");
     marker.bindPopup(
       `<div class="map-popup">
-        <div class="store-name">${escHtml(p.name)} <span class="muted">(${escHtml(p.store_code)})</span></div>
+        <div class="store-name"><span class="store-code">${escHtml(p.store_code)}</span> ${escHtml(p.name)}</div>
         <div class="muted small">${escHtml(addr || "주소 없음")}</div>
         <div class="distance">${escHtml(data.model)} ${p.qty}대${hold}</div>
         ${dealers ? `<div class="muted small">${dealers}</div>` : ""}

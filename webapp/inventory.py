@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 import re
-from io import BytesIO
+from datetime import date, datetime
+from io import BytesIO, StringIO
 from typing import Any
 
 from openpyxl import load_workbook
@@ -98,13 +100,47 @@ def _find_inventory_header(ws: Worksheet) -> tuple[int, dict[str, int]]:
     return 0, {}
 
 
+def _parse_as_of_value(val) -> str:
+    if val is None or val == "":
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%Y%m%d")
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val.strftime("%Y%m%d")
+    if isinstance(val, bool):
+        return ""
+    if isinstance(val, (int, float)):
+        number = int(val)
+        if 20200101 <= number <= 20991231:
+            return str(number)
+        return ""
+    text = cell_str(val)
+    match = re.search(r"일자[:\s]*([0-9]{4})[.\-/]?([0-9]{2})[.\-/]?([0-9]{2})", text)
+    if match:
+        return "".join(match.groups())
+    digits = re.sub(r"\D", "", text)
+    if len(digits) == 8 and digits.startswith("20"):
+        return digits
+    return ""
+
+
 def _as_of_date(ws: Worksheet) -> str:
-    for row in ws.iter_rows(min_row=1, max_row=5, values_only=True):
+    """재고 파일 A2, 또는 헤더보다 위 칸의 기준일을 YYYYMMDD로 읽는다."""
+    try:
+        parsed = _parse_as_of_value(ws.cell(2, 1).value)
+        if parsed:
+            return parsed
+    except Exception:
+        pass
+    header_row, _ = _find_inventory_header(ws)
+    top = header_row - 1 if header_row and header_row > 1 else 0
+    if top < 1:
+        return ""
+    for row in ws.iter_rows(min_row=1, max_row=top, max_col=20, values_only=True):
         for val in row:
-            text = cell_str(val)
-            match = re.search(r"일자[:\s]*([0-9]{8})", text)
-            if match:
-                return match.group(1)
+            parsed = _parse_as_of_value(val)
+            if parsed:
+                return parsed
     return ""
 
 
@@ -118,6 +154,83 @@ def is_inventory_workbook(data: bytes) -> bool:
         return False
     finally:
         wb.close()
+
+
+def _item_from_raw(raw: dict[str, str]) -> dict[str, str] | None:
+    store_code = _pick(raw, HOLDER_CODE_ALIASES).strip().upper()
+    if not store_code:
+        return None
+    hold_raw = _pick(raw, HOLD_DAYS_ALIASES)
+    try:
+        hold_days = str(int(float(hold_raw))) if hold_raw else ""
+    except ValueError:
+        hold_days = hold_raw
+    return {
+        "store_code": store_code,
+        "holder_name": _pick(raw, HOLDER_NAME_ALIASES),
+        "holder_type": classify_holder(store_code),
+        "product_short": _pick(raw, PRODUCT_SHORT_ALIASES),
+        "model_name": _pick(raw, MODEL_ALIASES),
+        "purchase_price": _pick(raw, PRICE_ALIASES),
+        "inbound_date": _pick(raw, INBOUND_ALIASES)[:10],
+        "moved_date": _pick(raw, MOVED_ALIASES)[:10],
+        "hold_days": hold_days,
+        "serial": _pick(raw, SERIAL_ALIASES),
+        "dealer_org": _pick(raw, DEALER_ORG_ALIASES),
+    }
+
+
+def _decode_csv_text(data: bytes) -> str:
+    for enc in ("utf-8-sig", "cp949", "utf-8"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def parse_inventory_csv(filename: str, data: bytes) -> dict[str, Any]:
+    lines = list(csv.reader(StringIO(_decode_csv_text(data))))
+    header_idx = -1
+    headers: dict[str, int] = {}
+    as_of = ""
+    for i, row in enumerate(lines[:25]):
+        mapping = {}
+        for idx, value in enumerate(row, start=1):
+            key = normalize_header(value)
+            if key:
+                mapping[key] = idx
+        if mapping.keys() & HOLDER_CODE_ALIASES and (
+            mapping.keys() & PRODUCT_SHORT_ALIASES or mapping.keys() & MODEL_ALIASES
+        ):
+            header_idx = i
+            headers = mapping
+            break
+        for val in row:
+            as_of = as_of or _parse_as_of_value(val)
+    if header_idx < 0:
+        return {"filename": filename, "as_of_date": as_of, "rows": []}
+    rows: list[dict[str, str]] = []
+    for row in lines[header_idx + 1 :]:
+        raw = {h: cell_str(row[col - 1] if col - 1 < len(row) else "") for h, col in headers.items()}
+        if not any(raw.values()):
+            continue
+        item = _item_from_raw(raw)
+        if item:
+            rows.append(item)
+    return {"filename": filename, "as_of_date": as_of, "rows": rows}
+
+
+def is_inventory_csv(data: bytes) -> bool:
+    parsed = parse_inventory_csv("check.csv", data)
+    return bool(parsed.get("rows"))
+
+
+def parse_inventory_file(filename: str, data: bytes) -> dict[str, Any]:
+    name = (filename or "").lower()
+    if name.endswith(".csv"):
+        return parse_inventory_csv(filename, data)
+    return parse_inventory_xlsx(filename, data)
 
 
 def parse_inventory_xlsx(filename: str, data: bytes) -> dict[str, Any]:
@@ -137,29 +250,9 @@ def parse_inventory_xlsx(filename: str, data: bytes) -> dict[str, Any]:
                     raw[h] = cell_str(val)
                 if not any(raw.values()):
                     continue
-                store_code = _pick(raw, HOLDER_CODE_ALIASES).strip().upper()
-                if not store_code:
-                    continue
-                hold_raw = _pick(raw, HOLD_DAYS_ALIASES)
-                try:
-                    hold_days = str(int(float(hold_raw))) if hold_raw else ""
-                except ValueError:
-                    hold_days = hold_raw
-                rows.append(
-                    {
-                        "store_code": store_code,
-                        "holder_name": _pick(raw, HOLDER_NAME_ALIASES),
-                        "holder_type": classify_holder(store_code),
-                        "product_short": _pick(raw, PRODUCT_SHORT_ALIASES),
-                        "model_name": _pick(raw, MODEL_ALIASES),
-                        "purchase_price": _pick(raw, PRICE_ALIASES),
-                        "inbound_date": _pick(raw, INBOUND_ALIASES)[:10],
-                        "moved_date": _pick(raw, MOVED_ALIASES)[:10],
-                        "hold_days": hold_days,
-                        "serial": _pick(raw, SERIAL_ALIASES),
-                        "dealer_org": _pick(raw, DEALER_ORG_ALIASES),
-                    }
-                )
+                item = _item_from_raw(raw)
+                if item:
+                    rows.append(item)
         return {"filename": filename, "as_of_date": as_of, "rows": rows}
     finally:
         wb.close()
@@ -308,25 +401,31 @@ def replace_inventory(conn, parsed: dict[str, Any], now_iso: str, new_id, dealer
     }
 
 
+def _canon_model_token(token: str) -> str:
+    text = (token or "").strip().upper().replace(" ", "")
+    if not text:
+        return ""
+    if text.startswith("SM") and not text.startswith("SM-"):
+        return "SM-" + text[2:]
+    return text
+
+
 def parse_models(model_prefix: str | None) -> list[str]:
-    raw = (model_prefix or "").strip().upper().replace(" ", "")
-    if raw in {"ALL", "*", "ALLMODELS"}:
+    """빈 값·ALL 이면 전체 기종. 예전처럼 3기종으로 기본 고정하지 않는다."""
+    raw = (model_prefix or "").strip()
+    compact = raw.upper().replace(" ", "")
+    if compact in {"", "ALL", "*", "ALLMODELS"}:
         return []
-    if not raw:
-        return list(DEFAULT_MAP_MODELS)
     parts = []
     for token in re.split(r"[,|]+", raw):
         token = token.strip()
         if not token:
             continue
-        if token in {"ALL", "*"}:
+        if token.upper().replace(" ", "") in {"ALL", "*"}:
             return []
-        if token.startswith("SM-"):
-            parts.append(token)
-        elif token.startswith("SM"):
-            parts.append("SM-" + token[2:])
-        else:
-            parts.append("SM-" + token)
+        canon = _canon_model_token(token)
+        if canon and canon not in parts:
+            parts.append(canon)
     return parts
 
 
@@ -352,6 +451,10 @@ def _empty_map(
         "region": region,
         "keyword": keyword,
         "dealer_id": dealer_id,
+        "product_short": "",
+        "model_name": "",
+        "pin_color": "",
+        "color_mode": "hold",
         "total_qty": 0,
         "mapped_qty": 0,
         "unmapped_qty": 0,
@@ -401,9 +504,13 @@ def _latest_upload_ids(conn, dealer_id: str | None = None) -> list[str]:
 def _merge_store_rows(rows) -> list[dict]:
     grouped: dict[str, dict] = {}
     for row in rows:
-        code = row["store_code"]
+        raw_code = row["store_code"]
+        list_code = ""
+        if "list_store_code" in row.keys():
+            list_code = (row["list_store_code"] or "").strip()
+        code = list_code or raw_code
         qty = int(row["qty"] or 0)
-        item = grouped.get(code)
+        item = grouped.get(raw_code)
         if not item:
             address = row["address"] or ""
             item = {
@@ -422,7 +529,7 @@ def _merge_store_rows(rows) -> list[dict]:
                 "_dealers": {},
                 "_models": {},
             }
-            grouped[code] = item
+            grouped[raw_code] = item
         hold_sum = (item.get("_hold_sum") or 0) + (float(row["avg_hold_days"] or 0) * qty)
         item["_hold_sum"] = hold_sum
         item["qty"] += qty
@@ -458,6 +565,8 @@ def _merge_store_rows(rows) -> list[dict]:
             item["holder_name"] = row["holder_name"]
         if row["store_name"]:
             item["name"] = row["store_name"]
+        if list_code:
+            item["store_code"] = list_code
     out = []
     for item in grouped.values():
         hold_sum = item.pop("_hold_sum", 0)
@@ -525,9 +634,19 @@ def inventory_map_points(
     bbox=None,
     aged_only: bool = False,
     radius_km: float | None = None,
+    product_short: str | None = None,
+    model_name: str | None = None,
+    pin_color: str | None = None,
 ) -> dict:
-    models = parse_models(model_prefix)
-    model = ",".join(models) if models else "all"
+    wanted_short = (product_short or "").strip()
+    wanted_model_name = (model_name or "").strip()
+    models = [] if (wanted_short or wanted_model_name) else parse_models(model_prefix)
+    if wanted_model_name:
+        model = wanted_model_name
+    elif wanted_short:
+        model = wanted_short
+    else:
+        model = ",".join(models) if models else "all"
     holders = ("partner", "retail") if include_retail else ("partner",)
     placeholders = ",".join("?" * len(holders))
     wanted_region = (region or "").strip()
@@ -550,7 +669,15 @@ def inventory_map_points(
     model_params: list = []
     case_sql = []
     case_params: list = []
-    if models:
+    if wanted_model_name:
+        model_filter_sql = "AND UPPER(TRIM(COALESCE(i.model_name, ''))) = UPPER(?)"
+        model_params.append(wanted_model_name)
+        model_key_expr = "UPPER(TRIM(COALESCE(i.model_name, i.product_short, '')))"
+    elif wanted_short:
+        model_filter_sql = "AND UPPER(TRIM(COALESCE(i.product_short, ''))) = UPPER(?)"
+        model_params.append(wanted_short)
+        model_key_expr = "UPPER(TRIM(COALESCE(NULLIF(i.model_name, ''), i.product_short, '')))"
+    elif models:
         for name in models:
             like = f"{name}%"
             model_wheres.append(
@@ -579,11 +706,12 @@ def inventory_map_points(
             AVG(i.hold_days) AS avg_hold_days,
             MAX(i.hold_days) AS max_hold_days,
             SUM(CASE WHEN i.hold_days >= ? THEN 1 ELSE 0 END) AS aged_qty,
-            s.name AS store_name,
-            s.address,
-            s.detail_address,
-            s.lat,
-            s.lng
+            MAX(s.store_code) AS list_store_code,
+            MAX(s.name) AS store_name,
+            MAX(s.address) AS address,
+            MAX(s.detail_address) AS detail_address,
+            MAX(s.lat) AS lat,
+            MAX(s.lng) AS lng
         FROM inventory_items i
         LEFT JOIN stores s ON UPPER(TRIM(COALESCE(s.store_code, ''))) = UPPER(TRIM(COALESCE(i.store_code, '')))
         WHERE i.upload_id IN ({up_ph})
@@ -688,6 +816,10 @@ def inventory_map_points(
     return {
         "model": model,
         "models": models,
+        "product_short": wanted_short,
+        "model_name": wanted_model_name,
+        "pin_color": (pin_color or "").strip(),
+        "color_mode": "custom" if (pin_color or "").strip() else "hold",
         "model_totals": [model_totals[name] for name in models if name in model_totals],
         "as_of_date": ",".join(as_of_dates),
         "filename": ", ".join(u.get("filename") or "" for u in uploads),
@@ -732,7 +864,7 @@ def _partner_upload_filter(conn, dealer_id: str | None = None) -> tuple[list[str
     uploads = [
         dict(r)
         for r in conn.execute(
-            f"SELECT filename, as_of_date, row_count, dealer_code, dealer_name FROM inventory_uploads WHERE id IN ({','.join('?' * len(upload_ids))})",
+            f"SELECT dealer_id, filename, as_of_date, row_count, created_at, dealer_code, dealer_name FROM inventory_uploads WHERE id IN ({','.join('?' * len(upload_ids))})",
             upload_ids,
         ).fetchall()
     ]
@@ -782,6 +914,53 @@ def _scope_filters(region: str | None, keyword: str | None, bbox) -> tuple[str, 
         )"""
         params.extend([like, like, like, like, like])
     return sql, params
+
+
+def inventory_model_catalog(conn, dealer_id: str | None = None) -> dict:
+    """드롭다운용 대표상품명 → 모델명 목록. 판매점(P코드) 재고만."""
+    upload_ids, uploads = _partner_upload_filter(conn, dealer_id)
+    as_of_dates = sorted({u.get("as_of_date") or "" for u in uploads if u.get("as_of_date")})
+    empty = {
+        "as_of_date": ",".join(as_of_dates),
+        "uploads": uploads,
+        "products": [],
+    }
+    if not upload_ids:
+        return empty
+    up_ph = ",".join("?" * len(upload_ids))
+    rows = conn.execute(
+        f"""
+        SELECT
+            COALESCE(NULLIF(TRIM(i.product_short), ''), '미상') AS product_short,
+            COALESCE(NULLIF(TRIM(i.model_name), ''), COALESCE(NULLIF(TRIM(i.product_short), ''), '미상')) AS model_name,
+            COUNT(*) AS qty
+        FROM inventory_items i
+        WHERE i.upload_id IN ({up_ph})
+          AND i.holder_type = 'partner'
+        GROUP BY COALESCE(NULLIF(TRIM(i.product_short), ''), '미상'),
+                 COALESCE(NULLIF(TRIM(i.model_name), ''), COALESCE(NULLIF(TRIM(i.product_short), ''), '미상'))
+        ORDER BY qty DESC, product_short, model_name
+        """,
+        upload_ids,
+    ).fetchall()
+    products: dict[str, dict] = {}
+    for row in rows:
+        short = row["product_short"] or "미상"
+        item = products.get(short)
+        if not item:
+            item = {"product_short": short, "qty": 0, "models": []}
+            products[short] = item
+        qty = int(row["qty"] or 0)
+        item["qty"] += qty
+        item["models"].append({"model_name": row["model_name"] or short, "qty": qty})
+    catalog = sorted(products.values(), key=lambda p: (-p["qty"], p["product_short"]))
+    for item in catalog:
+        item["models"].sort(key=lambda m: (-m["qty"], m["model_name"]))
+    return {
+        "as_of_date": ",".join(as_of_dates),
+        "uploads": uploads,
+        "products": catalog,
+    }
 
 
 def inventory_model_breakdown(
@@ -958,6 +1137,7 @@ def inventory_overview(conn, dealer_id: str | None = None) -> dict:
     ]
     as_of_dates = sorted({u.get("as_of_date") or "" for u in uploads if u.get("as_of_date")})
     aged_qty = int(totals["aged_qty"] or 0)
+    uploads_by_dealer = {u.get("dealer_id") or "": u for u in uploads}
     result = {
         "as_of_date": ",".join(as_of_dates),
         "uploads": uploads,
@@ -971,6 +1151,10 @@ def inventory_overview(conn, dealer_id: str | None = None) -> dict:
                 "qty": int(d["qty"] or 0),
                 "stores": int(d["stores"] or 0),
                 "aged_qty": int(d["aged_qty"] or 0),
+                "filename": (uploads_by_dealer.get(d["dealer_id"] or "") or {}).get("filename") or "",
+                "as_of_date": (uploads_by_dealer.get(d["dealer_id"] or "") or {}).get("as_of_date") or "",
+                "uploaded_at": (uploads_by_dealer.get(d["dealer_id"] or "") or {}).get("created_at") or "",
+                "has_upload": True,
             }
             for d in by_dealer
         ],
@@ -1023,3 +1207,90 @@ def inventory_overview(conn, dealer_id: str | None = None) -> dict:
     }
     _OVERVIEW_CACHE[cache_key] = result
     return result
+
+
+def inventory_dealer_roster(conn) -> dict:
+    """관리자용 전체 대리점 목록. 포털 계정 + 재고를 올린 대리점을 모두 보여 준다."""
+    upload_ids, uploads = _partner_upload_filter(conn, None)
+    stats_by_id: dict[str, dict] = {}
+    if upload_ids:
+        up_ph = ",".join("?" * len(upload_ids))
+        for row in conn.execute(
+            f"""
+            SELECT i.dealer_id,
+                   MAX(i.dealer_code) AS dealer_code,
+                   MAX(i.dealer_name) AS dealer_name,
+                   COUNT(*) AS qty,
+                   COUNT(DISTINCT i.store_code) AS stores,
+                   SUM(CASE WHEN i.hold_days >= ? THEN 1 ELSE 0 END) AS aged_qty
+            FROM inventory_items i
+            WHERE i.upload_id IN ({up_ph})
+              AND i.holder_type = 'partner'
+            GROUP BY i.dealer_id
+            """,
+            (AGED_DAYS, *upload_ids),
+        ):
+            stats_by_id[row["dealer_id"] or ""] = dict(row)
+    uploads_by_id = {u.get("dealer_id") or "": u for u in uploads}
+
+    names: dict[str, dict] = {}
+    for row in conn.execute(
+        """
+        SELECT DISTINCT d.id, d.dealer_code, d.name
+        FROM dealers d
+        JOIN admins a ON a.dealer_id = d.id
+        WHERE COALESCE(a.role, '') = 'dealer'
+           OR (a.dealer_id IS NOT NULL AND TRIM(a.dealer_id) != '')
+        ORDER BY d.name
+        """
+    ):
+        names[row["id"]] = {
+            "dealer_id": row["id"],
+            "dealer_code": row["dealer_code"] or "",
+            "dealer_name": row["name"] or "",
+        }
+    for dealer_id, upload in uploads_by_id.items():
+        if not dealer_id:
+            continue
+        prev = names.get(dealer_id) or {}
+        names[dealer_id] = {
+            "dealer_id": dealer_id,
+            "dealer_code": prev.get("dealer_code") or upload.get("dealer_code") or "",
+            "dealer_name": prev.get("dealer_name") or upload.get("dealer_name") or "",
+        }
+    for dealer_id, stats in stats_by_id.items():
+        if not dealer_id or dealer_id in names:
+            continue
+        names[dealer_id] = {
+            "dealer_id": dealer_id,
+            "dealer_code": stats.get("dealer_code") or "",
+            "dealer_name": stats.get("dealer_name") or "",
+        }
+
+    roster = []
+    for dealer_id, meta in names.items():
+        stats = stats_by_id.get(dealer_id) or {}
+        upload = uploads_by_id.get(dealer_id) or {}
+        roster.append(
+            {
+                "dealer_id": dealer_id,
+                "dealer_code": meta.get("dealer_code") or stats.get("dealer_code") or upload.get("dealer_code") or "",
+                "dealer_name": meta.get("dealer_name") or stats.get("dealer_name") or upload.get("dealer_name") or "미지정",
+                "qty": int(stats.get("qty") or 0),
+                "stores": int(stats.get("stores") or 0),
+                "aged_qty": int(stats.get("aged_qty") or 0),
+                "filename": upload.get("filename") or "",
+                "as_of_date": upload.get("as_of_date") or "",
+                "uploaded_at": upload.get("created_at") or "",
+                "row_count": int(upload.get("row_count") or 0),
+                "has_upload": bool(upload),
+            }
+        )
+    roster.sort(key=lambda d: (-d["qty"], d["dealer_name"] or ""))
+    uploaded = [d for d in roster if d["has_upload"]]
+    return {
+        "dealer_count": len(roster),
+        "uploaded_count": len(uploaded),
+        "pending_count": len(roster) - len(uploaded),
+        "dealers": roster,
+    }

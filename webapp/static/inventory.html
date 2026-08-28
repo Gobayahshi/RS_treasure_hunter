@@ -12,6 +12,13 @@
 <header class="topbar">
   <span class="brand">대리점 재고</span>
   <nav id="chatNav" class="hidden">
+    <span id="asOfBadge" class="as-of-badge muted small hidden"></span>
+    <label id="sktDealerWrap" class="skt-dealer-wrap hidden">
+      대리점
+      <select id="sktDealerSelect" aria-label="대리점 선택">
+        <option value="">전체 대리점</option>
+      </select>
+    </label>
     <a class="muted small" id="chatAdminLink" href="admin">관리자</a>
     <span id="chatUser" class="muted small"></span>
     <button id="chatLogoutBtn">로그아웃</button>
@@ -22,31 +29,73 @@
   <section id="screen-chat-login" class="screen">
     <div class="card center-card">
       <h1>대리점 재고</h1>
-      <p class="muted">유원·프리스비 계정으로 로그인하면 자기 재고만 올리고 지도·채팅으로 볼 수 있습니다.</p>
-      <div class="dealer-pick" role="group" aria-label="대리점 선택">
+      <p class="muted">대리점은 자기 재고만 올리고, 관리자는 전체 대리점이 올린 재고를 한 화면에서 봅니다.</p>
+      <div class="dealer-pick" role="group" aria-label="테스트 계정">
         <button type="button" id="pickYuwon" data-user="yuwon">유원</button>
         <button type="button" id="pickFrisbee" data-user="frisbee">프리스비</button>
+        <button type="button" id="pickJieun" data-user="jieun">지은</button>
       </div>
+      <button type="button" id="pickAdmin" class="btn-secondary" data-user="admin">관리자 전체 보기</button>
       <input id="chatUsername" type="text" placeholder="아이디" autocomplete="username" />
       <input id="chatPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
       <button type="button" id="chatLoginBtn" class="btn-primary">시작하기</button>
-      <p class="muted small login-hint">유원 <code>yuwon</code> / <code>yuwon</code> · 프리스비 <code>frisbee</code> / <code>frisbee</code></p>
+      <p class="muted small login-hint">테스트 대리점 <code>yuwon</code> / <code>frisbee</code> / <code>jieun</code> · 관리자 <code>admin</code> / <code>admin</code></p>
       <p id="chatLoginError" class="error hidden"></p>
     </div>
   </section>
 
   <div id="chat-app" class="hidden">
+    <aside id="hqPanel" class="hq-panel hidden" aria-label="전체 대리점">
+      <div class="hq-head">
+        <h2>전체 대리점</h2>
+        <p id="hqStatus" class="muted small">등록 0 · 업로드 0</p>
+      </div>
+      <button type="button" class="hq-all-btn active" data-dealer="" id="hqAllBtn">
+        <span>합산 보기</span>
+        <strong id="hqAllMeta">0대 · 0곳</strong>
+      </button>
+      <input id="hqSearch" type="search" placeholder="대리점 이름·코드 검색" autocomplete="off" />
+      <div class="hq-toolbar">
+        <div class="hq-filters" role="group" aria-label="업로드 상태">
+          <button type="button" class="active" data-hq-filter="all">전체</button>
+          <button type="button" data-hq-filter="uploaded">올림</button>
+          <button type="button" data-hq-filter="pending">미업로드</button>
+        </div>
+        <label class="hq-sort-label">
+          정렬
+          <select id="hqSort">
+            <option value="qty">대수 많은 순</option>
+            <option value="aged">묵은 재고 순</option>
+            <option value="recent">최근 업로드</option>
+            <option value="name">이름 순</option>
+          </select>
+        </label>
+      </div>
+      <div id="hqDealerList" class="hq-dealer-list" role="list"></div>
+    </aside>
     <div class="inventory-shell">
       <div class="inventory-map-pane">
         <div class="inventory-map-tools">
           <label class="inventory-upload">
             재고 엑셀
-            <input id="inventoryFile" type="file" accept=".xlsx" />
+            <input id="inventoryFile" type="file" accept=".xlsx,.csv" />
           </label>
           <button type="button" id="inventoryUploadBtn">올리기</button>
           <button type="button" id="myLocationBtn">내 위치</button>
           <button type="button" id="areaSelectBtn">영역 선택</button>
           <button type="button" id="areaClearBtn" class="hidden">선택 해제</button>
+          <label class="inventory-model-filter">
+            대표상품명
+            <select id="productShortSelect">
+              <option value="">선택</option>
+            </select>
+          </label>
+          <label class="inventory-model-filter">
+            모델명
+            <select id="modelNameSelect" disabled>
+              <option value="">해당 기종 전체</option>
+            </select>
+          </label>
           <span id="inventoryUploadStatus" class="inventory-upload-status muted small"></span>
         </div>
         <div id="chatMap" class="treasure-map" aria-label="재고 지도"></div>
@@ -72,7 +121,8 @@
         <div id="chatLog" class="chat-log"></div>
         <div class="chat-suggestions">
           <button type="button" data-q="오래 묵은 재고 어디가 많아?">오래된 재고</button>
-          <button type="button" data-q="유원이랑 프리스비 재고 비교해줘" data-all-dealers>대리점 비교</button>
+          <button type="button" data-q="오래된 재고를 빨간색으로 보여줘">오래된 재고 빨간색</button>
+          <button type="button" data-q="대리점별 재고 비교해줘" data-all-dealers>대리점 비교</button>
           <button type="button" data-q="현재 서울에 있는 재고 숫자가 몇 대인지?">서울 재고</button>
           <button type="button" data-q="김포에 뭐가 있어?">김포</button>
           <button type="button" data-q="이 영역에 기종별 재고 몇 대야">이 영역</button>
