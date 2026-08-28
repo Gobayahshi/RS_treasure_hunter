@@ -28,10 +28,7 @@ from inventory import (
     inventory_model_breakdown,
     inventory_model_catalog,
     inventory_overview,
-    is_inventory_csv,
-    is_inventory_workbook,
     parse_inventory_file,
-    parse_inventory_xlsx,
     replace_inventory,
 )
 from inventory_chat import ask_inventory
@@ -57,6 +54,7 @@ class _PrefixMiddleware:
 
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+app.config["MAX_CONTENT_LENGTH"] = 40 * 1024 * 1024
 app.wsgi_app = _PrefixMiddleware(app.wsgi_app, CONTEXT_PATH)
 _LOG_DIR = Path("/tmp") if CONTEXT_PATH else Path(__file__).resolve().parent
 GEOCODE_LOG_PATH = _LOG_DIR / "geocode_progress.log"
@@ -1486,16 +1484,11 @@ def import_inventory():
         return jsonify({"error": f"{filename}: .xlsx 또는 .csv 만 지원합니다."}), 400
     data = upload.read()
     try:
-        if lower.endswith(".csv"):
-            if not is_inventory_csv(data):
-                return jsonify({"error": "재고현황 파일로 보이지 않습니다. 보유처매장코드/대표상품명 열이 필요합니다."}), 400
-        elif not is_inventory_workbook(data):
-            return jsonify({"error": "재고현황 파일로 보이지 않습니다. 보유처매장코드/대표상품명 열이 필요합니다."}), 400
         parsed = parse_inventory_file(filename, data)
     except Exception as exc:
         return jsonify({"error": f"재고 엑셀을 읽지 못했습니다: {exc}"}), 400
     if not parsed["rows"]:
-        return jsonify({"error": "재고 행을 찾지 못했습니다."}), 400
+        return jsonify({"error": "재고현황 파일로 보이지 않습니다. 보유처매장코드/대표상품명 열이 필요합니다."}), 400
     try:
         with db_session() as conn:
             dealer = None

@@ -78,6 +78,9 @@ function escHtml(value) {
 function friendlyError(err) {
   const msg = String((err && err.message) || err || "").trim();
   if (!msg) return "요청에 실패했습니다.";
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+    return "서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+  }
   if (/<!DOCTYPE/i.test(msg) || /^\s*</.test(msg) || /bad gateway|502|503|504/i.test(msg)) {
     return "서버가 잠시 응답하지 않습니다. 잠시 후 다시 시도해 주세요.";
   }
@@ -626,7 +629,7 @@ async function handleInventoryUpload() {
   }
   const form = new FormData();
   form.append("file", file);
-  status.textContent = "올리는 중...";
+  status.textContent = "올리는 중... 파일이 크면 1~2분 걸릴 수 있습니다.";
   try {
     const data = await api("/inventory/excel", { method: "POST", body: form });
     const name = data.dealer_name || inventoryUser.dealer_name || "";
@@ -636,9 +639,19 @@ async function handleInventoryUpload() {
     catalogPicked = false;
     await loadCatalog();
     if (inventoryUser.can_see_all) loadHqSummary();
-    await loadInventoryMap(lastCoords);
+    try {
+      await loadInventoryMap(lastCoords);
+    } catch (mapErr) {
+      addBot(friendlyError(mapErr));
+    }
   } catch (e) {
-    status.textContent = friendlyError(e);
+    const raw = friendlyError(e);
+    const msg =
+      /응답하지 않습니다|연결하지 못했습니다/.test(raw)
+        ? "파일이 크거나 서버가 바쁩니다. 잠시 후 다시 올려 주세요."
+        : raw;
+    status.textContent = msg;
+    addBot(msg);
   }
 }
 
