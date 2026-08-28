@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
 <title>RS-Treasure Hunter</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-<link rel="stylesheet" href="css/style.css" />
+<link rel="stylesheet" href="css/style.css?v=20260828howto" />
 </head>
 <body>
 
@@ -31,6 +31,15 @@
       <input id="loginPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
       <button id="loginBtn" class="btn-primary">시작하기</button>
       <p id="loginError" class="error hidden"></p>
+      <div class="login-howto">
+        <p class="login-howto-title">방문 인증 방법</p>
+        <ol>
+          <li>로그인 후 위치 권한을 허용하세요.</li>
+          <li>지도에서 매장 <strong>30m 안</strong>으로 이동합니다.</li>
+          <li><strong>보물 캐러가기</strong>를 누르고 약 <strong>5초</strong> 머무르면 인증됩니다.</li>
+          <li>성공하면 포인트가 쌓이고, 같은 주소는 하루에 한 번입니다.</li>
+        </ol>
+      </div>
     </div>
   </section>
 
