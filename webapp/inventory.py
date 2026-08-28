@@ -410,6 +410,27 @@ def _canon_model_token(token: str) -> str:
     return text
 
 
+def _values_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw = list(value)
+    else:
+        raw = re.split(r"[,|]+", str(value))
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        text = str(item).strip()
+        if not text:
+            continue
+        key = text.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
 def parse_models(model_prefix: str | None) -> list[str]:
     """빈 값·ALL 이면 전체 기종. 예전처럼 3기종으로 기본 고정하지 않는다."""
     raw = (model_prefix or "").strip()
@@ -638,13 +659,13 @@ def inventory_map_points(
     model_name: str | None = None,
     pin_color: str | None = None,
 ) -> dict:
-    wanted_short = (product_short or "").strip()
-    wanted_model_name = (model_name or "").strip()
-    models = [] if (wanted_short or wanted_model_name) else parse_models(model_prefix)
-    if wanted_model_name:
-        model = wanted_model_name
-    elif wanted_short:
-        model = wanted_short
+    wanted_shorts = _values_list(product_short)
+    wanted_model_names = _values_list(model_name)
+    models = [] if (wanted_shorts or wanted_model_names) else parse_models(model_prefix)
+    if wanted_model_names:
+        model = ",".join(wanted_model_names)
+    elif wanted_shorts:
+        model = ",".join(wanted_shorts)
     else:
         model = ",".join(models) if models else "all"
     holders = ("partner", "retail") if include_retail else ("partner",)
@@ -669,13 +690,15 @@ def inventory_map_points(
     model_params: list = []
     case_sql = []
     case_params: list = []
-    if wanted_model_name:
-        model_filter_sql = "AND UPPER(TRIM(COALESCE(i.model_name, ''))) = UPPER(?)"
-        model_params.append(wanted_model_name)
+    if wanted_model_names:
+        ph = ",".join("?" * len(wanted_model_names))
+        model_filter_sql = f"AND UPPER(TRIM(COALESCE(i.model_name, ''))) IN ({ph})"
+        model_params.extend([name.upper() for name in wanted_model_names])
         model_key_expr = "UPPER(TRIM(COALESCE(i.model_name, i.product_short, '')))"
-    elif wanted_short:
-        model_filter_sql = "AND UPPER(TRIM(COALESCE(i.product_short, ''))) = UPPER(?)"
-        model_params.append(wanted_short)
+    elif wanted_shorts:
+        ph = ",".join("?" * len(wanted_shorts))
+        model_filter_sql = f"AND UPPER(TRIM(COALESCE(i.product_short, ''))) IN ({ph})"
+        model_params.extend([name.upper() for name in wanted_shorts])
         model_key_expr = "UPPER(TRIM(COALESCE(NULLIF(i.model_name, ''), i.product_short, '')))"
     elif models:
         for name in models:
@@ -816,8 +839,8 @@ def inventory_map_points(
     return {
         "model": model,
         "models": models,
-        "product_short": wanted_short,
-        "model_name": wanted_model_name,
+        "product_short": ",".join(wanted_shorts),
+        "model_name": ",".join(wanted_model_names),
         "pin_color": (pin_color or "").strip(),
         "color_mode": "custom" if (pin_color or "").strip() else "hold",
         "model_totals": [model_totals[name] for name in models if name in model_totals],

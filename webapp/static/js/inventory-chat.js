@@ -24,11 +24,18 @@ let inventoryUser = {
 let lastCoords = null;
 let hqDealerId = "";
 let modelCatalog = [];
-let mapProductShort = "";
-let mapModelName = "";
+let mapProductShorts = [];
+let mapModelNames = [];
 let mapPinColor = "";
 let mapAgedOnly = false;
 let catalogPicked = false;
+
+const FOCUS_CENTER = [37.55, 127.55];
+const FOCUS_ZOOM = 8;
+const FOCUS_BOUNDS = [
+  [36.85, 126.25],
+  [38.62, 129.35],
+];
 
 function $(id) {
   return document.getElementById(id);
@@ -71,18 +78,26 @@ async function api(path, options = {}) {
     headers["Content-Type"] = "application/json";
   }
   const res = await fetch(appUrl(`/api${path}`), { ...opts, headers });
+  const raw = await res.text();
+  let data = null;
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      data = null;
+    }
+  }
   if (res.status === 401) {
     setToken("");
     showLoggedOut();
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.message || "대리점 로그인이 필요합니다.");
+    throw new Error((data && data.message) || "대리점 로그인이 필요합니다.");
   }
   if (!res.ok) {
-    const data = await res.json().catch(() => null);
-    const text = data ? data.message || data.error || JSON.stringify(data) : await res.text();
-    throw new Error(text || `API ${path} 실패: ${res.status}`);
+    throw new Error(
+      (data && (data.message || data.error)) || raw || `API ${path} 실패: ${res.status}`
+    );
   }
-  return res.json();
+  return data;
 }
 
 function showLoggedOut() {
@@ -237,7 +252,7 @@ function ensureChatMap() {
     setTimeout(() => chatMap.invalidateSize(), 80);
     return chatMap;
   }
-  chatMap = L.map("chatMap").setView([37.5, 126.9], 10);
+  chatMap = L.map("chatMap").setView(FOCUS_CENTER, FOCUS_ZOOM);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap",
   }).addTo(chatMap);
@@ -413,22 +428,19 @@ function renderChatMap(data, origin, keepView = false) {
     const isNearest = nearestCode && (p.stores || []).some((s) => s.store_code === nearestCode);
     const marker = L.marker([p.lat, p.lng], { icon: stockIcon(p, isNearest, showLabel) });
     const dist = p.distance_meters != null ? `<div class="distance">${formatKm(p.distance_meters)}</div>` : "";
-    const hold = p.max_hold_days != null
-      ? ` · 최장 ${p.max_hold_days}일${p.aged_qty ? ` · 30일+ ${p.aged_qty}대` : ""}`
-      : "";
     const dealers = (p.dealers || []).map((d) => `${escHtml(d.dealer_name)} ${d.qty}대`).join(" · ");
     const models = (p.models || []).map((m) => `${escHtml(m.model)} ${m.qty}대`).join(" · ");
     const storeRows = (p.stores || [p]).map((s) => {
-      const sHold = s.max_hold_days != null ? ` · 최장 ${s.max_hold_days}일` : "";
-      return `<div class="store-line"><span class="store-code">${escHtml(s.store_code)}</span> ${escHtml(s.name)} <span class="muted">${s.qty}대${sHold}</span></div>`;
+      return `<div class="store-line"><span class="store-code">${escHtml(s.store_code)}</span> ${escHtml(s.name)} <span class="muted">${s.qty}대</span></div>`;
     }).join("");
+    const addr = [p.address, p.detail_address].filter(Boolean).join(" ");
     marker.bindPopup(
       `<div class="map-popup">
       <div class="store-list">${storeRows}</div>
-      <div class="muted small">${escHtml(p.address || "")}</div>
-      <div class="distance">${p.qty}대${hold}</div>
+      <div class="distance">${p.qty}대${p.aged_qty ? ` · 30일+ ${p.aged_qty}대` : ""}</div>
       ${models ? `<div class="muted small">${models}</div>` : ""}
-      ${dealers ? `<div class="muted small">${dealers}</div>` : ""}${dist}</div>`
+      ${dealers ? `<div class="muted small">${dealers}</div>` : ""}${dist}
+      ${addr ? `<div class="muted small store-address">${escHtml(addr)}</div>` : ""}</div>`
     );
     if (!showLabel) {
       marker.bindTooltip(storeCaptionText(p), { direction: "right", offset: [16, 0], opacity: 0.95 });
@@ -453,16 +465,28 @@ function renderChatMap(data, origin, keepView = false) {
     setTimeout(() => map.invalidateSize(), 80);
     return;
   }
+  fitChatMap(map, bounds, origin, nearestMarker, data);
+}
+
+function fitChatMap(map, bounds, origin, nearestMarker, data) {
   if (origin && bounds.length) {
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
     if (nearestMarker) nearestMarker.openPopup();
-  } else if (nearestMarker && data.nearest) {
+  } else if (nearestMarker && data && data.nearest) {
     map.setView([data.nearest.lat, data.nearest.lng], 14);
     nearestMarker.openPopup();
   } else if (bounds.length === 1) {
     map.setView(bounds[0], 14);
   } else if (bounds.length > 1) {
-    map.fitBounds(bounds, { padding: [28, 28], maxZoom: 13 });
+    const fitted = L.latLngBounds(bounds);
+    const focus = L.latLngBounds(FOCUS_BOUNDS);
+    if (fitted.getSouth() < 36.3 || fitted.getNorth() > 38.75) {
+      map.fitBounds(focus, { padding: [24, 24], maxZoom: 9 });
+    } else {
+      map.fitBounds(fitted, { padding: [28, 28], maxZoom: 11 });
+    }
+  } else {
+    map.setView(FOCUS_CENTER, FOCUS_ZOOM);
   }
   setTimeout(() => map.invalidateSize(), 80);
 }
@@ -558,15 +582,13 @@ async function handleInventoryUpload() {
   try {
     const data = await api("/inventory/excel", { method: "POST", body: form });
     const name = data.dealer_name || inventoryUser.dealer_name || "";
-    status.textContent = `${name} ${Number(data.row_count || 0).toLocaleString("ko-KR")}행으로 교체했습니다.`;
-    addBot(
-      `${name} 재고를 올렸습니다. ${Number(data.row_count || 0).toLocaleString("ko-KR")}행이며, 이 대리점의 이전 재고는 지웠습니다.`
-    );
+    const msg = `${name} 재고 현황을 업데이트 했습니다`.trim();
+    status.textContent = msg;
+    addBot(msg);
     catalogPicked = false;
     await loadCatalog();
     if (inventoryUser.can_see_all) loadHqSummary();
-    const mapData = await loadInventoryMap(lastCoords);
-    addBot(describeMap(mapData, lastCoords));
+    await loadInventoryMap(lastCoords);
   } catch (e) {
     status.textContent = e.message || "업로드에 실패했습니다.";
   }
@@ -619,14 +641,14 @@ function greet() {
   const dealer = inventoryUser.dealer_name;
   if (dealer && !inventoryUser.can_see_all) {
     addBot(
-      `${dealer} 재고만 보여 드립니다. 엑셀을 올리면 이전 재고는 지우고 이번 파일만 남습니다. 위 드롭다운에서 대표상품명·모델명을 고르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다.`
+      "위 드롭다운에서 대표상품명·모델명을 고르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다."
     );
   } else {
     addBot(
       "올린 대리점 재고를 함께 봅니다. 왼쪽에서 대리점을 고를 수 있고, 위 드롭다운에서 대표상품명·모델명을 고르면 그 기종만 지도에 나옵니다. 채팅은 질문한 내용 그대로 답합니다."
     );
   }
-  requestMyLocation({ announce: true });
+  requestMyLocation({ announce: false });
 }
 
 async function loadInventoryMap(coords) {
@@ -639,9 +661,9 @@ async function loadInventoryMap(coords) {
 
 function mapQueryParams(coords) {
   const params = new URLSearchParams();
-  if (mapProductShort) params.set("product_short", mapProductShort);
-  if (mapModelName) params.set("model_name", mapModelName);
-  if (!mapProductShort && !mapModelName) params.set("model", "ALL");
+  for (const value of mapProductShorts) params.append("product_short", value);
+  for (const value of mapModelNames) params.append("model_name", value);
+  if (!mapProductShorts.length && !mapModelNames.length) params.set("model", "ALL");
   if (mapAgedOnly) params.set("aged_only", "1");
   if (mapPinColor) params.set("pin_color", mapPinColor);
   if (coords) {
@@ -709,51 +731,111 @@ async function loadCatalog() {
 }
 
 function fillProductSelect() {
-  const sel = $("productShortSelect");
-  if (!sel) return;
-  const prev = mapProductShort;
-  sel.innerHTML = `<option value="">대표상품명 선택</option>`;
+  const menu = $("productShortMenu");
+  if (!menu) return;
+  const keep = new Set(mapProductShorts);
+  menu.innerHTML = "";
   for (const p of modelCatalog) {
-    const opt = document.createElement("option");
-    opt.value = p.product_short;
-    opt.textContent = `${p.product_short} (${Number(p.qty || 0).toLocaleString("ko-KR")}대)`;
-    sel.appendChild(opt);
+    const label = document.createElement("label");
+    label.className = "multi-pick-item";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = p.product_short;
+    box.checked = keep.has(p.product_short);
+    const qty = Number(p.qty || 0).toLocaleString("ko-KR");
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(` ${p.product_short} `));
+    const meta = document.createElement("span");
+    meta.className = "muted";
+    meta.textContent = `${qty}대`;
+    label.appendChild(meta);
+    menu.appendChild(label);
   }
-  if (!catalogPicked && !prev && modelCatalog[0]) {
-    mapProductShort = modelCatalog[0].product_short;
-    catalogPicked = true;
-  } else if (prev && [...sel.options].some((o) => o.value === prev)) {
-    mapProductShort = prev;
-  } else if (prev && ![...sel.options].some((o) => o.value === prev)) {
-    mapProductShort = "";
-    mapModelName = "";
-  }
-  sel.value = mapProductShort;
+  mapProductShorts = mapProductShorts.filter((v) => modelCatalog.some((p) => p.product_short === v));
+  updateMultiPickLabel("productShortBtn", mapProductShorts, "전체");
   fillModelSelect();
 }
 
+function selectedProductModels() {
+  const products = mapProductShorts.length
+    ? modelCatalog.filter((p) => mapProductShorts.includes(p.product_short))
+    : [];
+  const merged = new Map();
+  for (const p of products) {
+    for (const m of p.models || []) {
+      const prev = merged.get(m.model_name) || { model_name: m.model_name, qty: 0 };
+      prev.qty += m.qty || 0;
+      merged.set(m.model_name, prev);
+    }
+  }
+  return [...merged.values()].sort((a, b) => b.qty - a.qty || a.model_name.localeCompare(b.model_name));
+}
+
 function fillModelSelect() {
-  const sel = $("modelNameSelect");
-  if (!sel) return;
-  const product = modelCatalog.find((p) => p.product_short === mapProductShort);
-  sel.innerHTML = `<option value="">해당 기종 전체</option>`;
-  sel.disabled = !product;
-  if (!product) {
-    mapModelName = "";
+  const menu = $("modelNameMenu");
+  const btn = $("modelNameBtn");
+  if (!menu || !btn) return;
+  const models = selectedProductModels();
+  const keep = new Set(mapModelNames);
+  menu.innerHTML = "";
+  btn.disabled = !models.length;
+  if (!models.length) {
+    mapModelNames = [];
+    updateMultiPickLabel("modelNameBtn", [], "대표상품 먼저");
     return;
   }
-  for (const m of product.models || []) {
-    const opt = document.createElement("option");
-    opt.value = m.model_name;
-    opt.textContent = `${m.model_name} (${Number(m.qty || 0).toLocaleString("ko-KR")}대)`;
-    sel.appendChild(opt);
+  for (const m of models) {
+    const label = document.createElement("label");
+    label.className = "multi-pick-item";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = m.model_name;
+    box.checked = keep.has(m.model_name);
+    const qty = Number(m.qty || 0).toLocaleString("ko-KR");
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(` ${m.model_name} `));
+    const meta = document.createElement("span");
+    meta.className = "muted";
+    meta.textContent = `${qty}대`;
+    label.appendChild(meta);
+    menu.appendChild(label);
   }
-  if (mapModelName && [...sel.options].some((o) => o.value === mapModelName)) {
-    sel.value = mapModelName;
-  } else {
-    mapModelName = "";
-    sel.value = "";
+  mapModelNames = mapModelNames.filter((v) => models.some((m) => m.model_name === v));
+  updateMultiPickLabel("modelNameBtn", mapModelNames, "해당 기종 전체");
+}
+
+function updateMultiPickLabel(btnId, values, emptyText) {
+  const btn = $(btnId);
+  if (!btn) return;
+  if (!values.length) {
+    btn.textContent = emptyText;
+    return;
   }
+  if (values.length === 1) {
+    btn.textContent = values[0];
+    return;
+  }
+  btn.textContent = `${values[0]} 외 ${values.length - 1}개`;
+}
+
+function readChecked(menuId) {
+  const menu = $(menuId);
+  if (!menu) return [];
+  return [...menu.querySelectorAll("input[type=checkbox]:checked")].map((el) => el.value);
+}
+
+function closeMultiPickMenus(exceptId) {
+  document.querySelectorAll(".multi-pick-menu").forEach((el) => {
+    if (el.id !== exceptId) el.classList.add("hidden");
+  });
+}
+
+function toggleMultiPick(menuId) {
+  const menu = $(menuId);
+  if (!menu) return;
+  const willOpen = menu.classList.contains("hidden");
+  closeMultiPickMenus(willOpen ? menuId : "");
+  menu.classList.toggle("hidden", !willOpen);
 }
 
 function resetMapStyle() {
@@ -762,19 +844,21 @@ function resetMapStyle() {
 }
 
 function onProductShortChange() {
-  mapProductShort = $("productShortSelect").value || "";
-  mapModelName = "";
+  mapProductShorts = readChecked("productShortMenu");
+  mapModelNames = [];
   catalogPicked = true;
   resetMapStyle();
+  updateMultiPickLabel("productShortBtn", mapProductShorts, "전체");
   fillModelSelect();
-  loadInventoryMap(lastCoords).then((data) => addBot(describeMap(data, lastCoords))).catch((err) => addBot(String(err.message || err)));
+  loadInventoryMap(lastCoords).catch((err) => addBot(String(err.message || err)));
 }
 
 function onModelNameChange() {
-  mapModelName = $("modelNameSelect").value || "";
+  mapModelNames = readChecked("modelNameMenu");
   catalogPicked = true;
   resetMapStyle();
-  loadInventoryMap(lastCoords).then((data) => addBot(describeMap(data, lastCoords))).catch((err) => addBot(String(err.message || err)));
+  updateMultiPickLabel("modelNameBtn", mapModelNames, "해당 기종 전체");
+  loadInventoryMap(lastCoords).catch((err) => addBot(String(err.message || err)));
 }
 
 function uploadLabel(uploads, dealerId) {
@@ -854,7 +938,6 @@ function applyHqDealer(dealerId) {
   catalogPicked = false;
   return loadCatalog()
     .then(() => loadInventoryMap(lastCoords))
-    .then((data) => addBot(describeMap(data, lastCoords)))
     .catch((err) => addBot(String(err.message || err)));
 }
 
@@ -866,32 +949,13 @@ function handleHqClick(ev) {
   applyHqDealer(btn.getAttribute("data-dealer") || "");
 }
 
-function describeMap(data, coords) {
-  const mapped = Number((data && data.mapped_qty) || 0);
-  const unmapped = Number((data && data.unmapped_qty) || 0);
-  const stores = ((data && data.points) || []).length;
-  if (!mapped && !unmapped) {
-    return "표시할 판매점 재고가 없습니다. 엑셀을 올려 주세요. 판매점(P코드) 재고만 지도에 나옵니다.";
-  }
-  if (!mapped && unmapped) {
-    return `재고 ${unmapped.toLocaleString("ko-KR")}대가 있지만 판매점 좌표가 없어 지도에 찍지 못했습니다.`;
-  }
-  const nearest = data && data.nearest;
-  if (coords && nearest) {
-    return `지금 위치 기준 약 20km 안 ${stores}곳, ${mapped.toLocaleString("ko-KR")}대입니다. 가장 가까운 곳은 ${nearest.name} (${formatKm(nearest.distance_meters)}) · ${nearest.qty}대입니다.`;
-  }
-  return `지도에 판매점 ${stores}곳, ${mapped.toLocaleString("ko-KR")}대를 표시했습니다.`;
-}
-
 async function requestMyLocation(options = {}) {
   const announce = !!options.announce;
   const btn = $("myLocationBtn");
   if (btn) btn.classList.add("active");
   if (!navigator.geolocation) {
     if (announce) addBot("이 브라우저는 위치 정보를 지원하지 않아 전체 재고를 표시합니다.");
-    await loadInventoryMap(null).then((data) => {
-      if (announce) addBot(describeMap(data, null));
-    }).catch((err) => addBot(String(err.message || err)));
+    await loadInventoryMap(null).catch((err) => addBot(String(err.message || err)));
     return;
   }
   navigator.geolocation.getCurrentPosition(
@@ -902,13 +966,8 @@ async function requestMyLocation(options = {}) {
         if ((!data.points || !data.points.length) && lastCoords) {
           const nationwide = await loadInventoryMap(null);
           renderChatMap(nationwide, lastCoords);
-          if (announce) {
-            addBot("근처 20km 안에서는 표시할 재고가 없어, 같은 기종을 전국으로 보여 드립니다.");
-            addBot(describeMap(nationwide, lastCoords));
-          }
           return;
         }
-        if (announce) addBot(describeMap(data, lastCoords));
       } catch (err) {
         addBot(String(err.message || err));
       }
@@ -921,7 +980,6 @@ async function requestMyLocation(options = {}) {
           addBot(
             `위치를 쓰지 못해 전체 재고를 표시합니다. (${err.message || "권한 거부"}) 브라우저에서 위치 권한을 허용하면 근처 재고를 볼 수 있습니다.`
           );
-          addBot(describeMap(data, null));
         }
       } catch (e) {
         addBot(String(e.message || e));
@@ -1041,10 +1099,28 @@ document.addEventListener("DOMContentLoaded", () => {
   const pickAdmin = $("pickAdmin");
   if (pickAdmin) pickAdmin.addEventListener("click", (e) => pickDealer("admin", e.currentTarget));
   $("inventoryUploadBtn").addEventListener("click", handleInventoryUpload);
-  const productSel = $("productShortSelect");
-  const modelSel = $("modelNameSelect");
-  if (productSel) productSel.addEventListener("change", onProductShortChange);
-  if (modelSel) modelSel.addEventListener("change", onModelNameChange);
+  const productBtn = $("productShortBtn");
+  const modelBtn = $("modelNameBtn");
+  if (productBtn) productBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleMultiPick("productShortMenu");
+  });
+  if (modelBtn) modelBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (modelBtn.disabled) return;
+    toggleMultiPick("modelNameMenu");
+  });
+  const productMenu = $("productShortMenu");
+  const modelMenu = $("modelNameMenu");
+  if (productMenu) {
+    productMenu.addEventListener("click", (e) => e.stopPropagation());
+    productMenu.addEventListener("change", onProductShortChange);
+  }
+  if (modelMenu) {
+    modelMenu.addEventListener("click", (e) => e.stopPropagation());
+    modelMenu.addEventListener("change", onModelNameChange);
+  }
+  document.addEventListener("click", () => closeMultiPickMenus(""));
   const hqPanel = $("hqPanel");
   if (hqPanel) hqPanel.addEventListener("click", handleHqClick);
   const hqSearch = $("hqSearch");

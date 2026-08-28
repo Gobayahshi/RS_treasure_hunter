@@ -84,18 +84,20 @@
           <button type="button" id="myLocationBtn">내 위치</button>
           <button type="button" id="areaSelectBtn">영역 선택</button>
           <button type="button" id="areaClearBtn" class="hidden">선택 해제</button>
-          <label class="inventory-model-filter">
+          <div class="inventory-model-filter">
             대표상품명
-            <select id="productShortSelect">
-              <option value="">선택</option>
-            </select>
-          </label>
-          <label class="inventory-model-filter">
+            <div class="multi-pick">
+              <button type="button" class="multi-pick-btn" id="productShortBtn">전체</button>
+              <div class="multi-pick-menu hidden" id="productShortMenu"></div>
+            </div>
+          </div>
+          <div class="inventory-model-filter">
             모델명
-            <select id="modelNameSelect" disabled>
-              <option value="">해당 기종 전체</option>
-            </select>
-          </label>
+            <div class="multi-pick">
+              <button type="button" class="multi-pick-btn" id="modelNameBtn" disabled>대표상품 먼저</button>
+              <div class="multi-pick-menu hidden" id="modelNameMenu"></div>
+            </div>
+          </div>
           <span id="inventoryUploadStatus" class="inventory-upload-status muted small"></span>
         </div>
         <div id="chatMap" class="treasure-map" aria-label="재고 지도"></div>

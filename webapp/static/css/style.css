@@ -554,7 +554,7 @@ body.admin-page main {
 
 #chat-app.is-hq {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 220px 1fr;
   height: calc(100vh - 56px);
 }
 
@@ -661,7 +661,7 @@ body.inventory-assist .inventory-shell {
 
 .inventory-shell {
   display: grid;
-  grid-template-columns: 1.4fr 360px;
+  grid-template-columns: minmax(0, 1fr) 300px;
   min-height: calc(100vh - 56px);
 }
 
@@ -686,7 +686,7 @@ body.inventory-assist .inventory-shell {
   flex-wrap: wrap;
   gap: 8px;
   align-items: flex-start;
-  max-width: min(720px, calc(100% - 24px));
+  max-width: min(980px, calc(100% - 24px));
 }
 
 .inventory-map-tools button {
@@ -800,13 +800,64 @@ body.inventory-assist .inventory-shell {
   color: #111;
 }
 
-.inventory-model-filter select {
-  min-width: 160px;
-  max-width: 240px;
+.multi-pick {
+  position: relative;
+  min-width: 168px;
+}
+
+.inventory-map-tools .multi-pick-btn {
+  width: 100%;
   margin: 0;
   padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
   font-size: 12px;
   font-weight: 600;
+  text-align: left;
+  box-shadow: none;
+}
+
+.multi-pick-btn:disabled {
+  color: #9ca3af;
+  background: #f9fafb;
+}
+
+.multi-pick-menu {
+  position: absolute;
+  z-index: 800;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(0,0,0,.12);
+}
+
+.multi-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.multi-pick-item input {
+  width: auto;
+  margin: 0;
+}
+
+.map-popup .store-address {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #e5e7eb;
 }
 
 .inventory-upload-status {

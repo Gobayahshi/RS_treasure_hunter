@@ -122,6 +122,7 @@ def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None
     cleaned = (text or "").strip()
     cleaned = re.sub(r"SM-?[A-Za-z0-9\-]+", " ", cleaned, flags=re.I)
     cleaned = re.sub(r"F\d{3,4}", " ", cleaned, flags=re.I)
+    cleaned = re.sub(r"[AS]\d{3,4}N?", " ", cleaned, flags=re.I)
     drop = [
         region,
         "서울특별시",
@@ -327,13 +328,22 @@ def ask_inventory(
     all_dealers = [dict(r) for r in conn.execute("SELECT id, dealer_code, name FROM dealers").fetchall()]
     dealers = [d for d in all_dealers if d["id"] == dealer_id] if dealer_id else all_dealers
     nlu = "rules"
+    rules = parse_inventory_question(text, dealers)
     parsed = None
     if llm_available():
         parsed = interpret_inventory_question(text, dealers)
         if parsed:
             nlu = "llm"
+            if not (parsed.get("keyword") or "").strip() and (rules.get("keyword") or "").strip():
+                parsed["keyword"] = rules["keyword"]
+                if parsed.get("intent") in {"total", "analyze", "help"}:
+                    parsed["intent"] = "keyword"
+            if (not parsed.get("models")) and rules.get("models"):
+                parsed["models"] = rules["models"]
+                if not parsed.get("model") or str(parsed.get("model")).upper() in {"", "ALL", "*"}:
+                    parsed["model"] = rules.get("model") or "ALL"
     if not parsed:
-        parsed = parse_inventory_question(text, dealers)
+        parsed = rules
     color = _extract_pin_color(text)
     if color:
         parsed["pin_color"] = color
@@ -432,7 +442,7 @@ def _answer_from_parsed(
         if parsed.get("dealer_id"):
             name = parsed.get("dealer_name") or "이 대리점"
             answer = (
-                f"{name} 재고만 보여 드립니다. 엑셀을 다시 올리면 이전 재고는 지우고 이번 파일만 남습니다. "
+                f"{name} 재고를 보여 드립니다. "
                 "어디에 몇 대인지, 오래 묵은 재고, 지도에서 고른 영역도 물어볼 수 있습니다. "
                 "예: 「오래 묵은 재고 어디가 많아?」, 「김포에 뭐가 있어?」, 「이 영역에 A175 몇 대야」."
             )

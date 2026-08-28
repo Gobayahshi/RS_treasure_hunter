@@ -1505,8 +1505,12 @@ def inventory_map():
     dealer_id = _scoped_dealer_id() or (request.args.get("dealer_id") or "").strip()
     dealer_code = (request.args.get("dealer") or request.args.get("dealer_code") or "").strip()
     aged_only = (request.args.get("aged_only") or "").strip() in {"1", "true", "yes"}
-    product_short = (request.args.get("product_short") or "").strip()
-    model_name = (request.args.get("model_name") or "").strip()
+    product_shorts = []
+    for raw in request.args.getlist("product_short"):
+        product_shorts.extend([p.strip() for p in str(raw).split(",") if p.strip()])
+    model_names = []
+    for raw in request.args.getlist("model_name"):
+        model_names.extend([p.strip() for p in str(raw).split(",") if p.strip()])
     pin_color = (request.args.get("pin_color") or "").strip()
     lat = lng = None
     bbox = None
@@ -1550,8 +1554,8 @@ def inventory_map():
             bbox=bbox,
             aged_only=aged_only,
             radius_km=radius_km,
-            product_short=product_short,
-            model_name=model_name,
+            product_short=product_shorts,
+            model_name=model_names,
             pin_color=pin_color,
         )
         if bbox:
@@ -1582,16 +1586,19 @@ def inventory_ask():
             return jsonify({"error": "lat, lng는 숫자여야 합니다."}), 400
     bbox = body.get("bbox")
     dealer_id = _scoped_dealer_id() or (body.get("dealer_id") or "").strip() or None
-    with db_session() as conn:
-        result = ask_inventory(
-            conn,
-            text,
-            lat=lat,
-            lng=lng,
-            bbox=bbox,
-            dealer_id=dealer_id,
-        )
-    return jsonify(result)
+    try:
+        with db_session() as conn:
+            result = ask_inventory(
+                conn,
+                text,
+                lat=lat,
+                lng=lng,
+                bbox=bbox,
+                dealer_id=dealer_id,
+            )
+        return jsonify(result)
+    except Exception:
+        return jsonify({"error": "ask_failed", "message": "질문을 처리하지 못했습니다. 다시 시도해 주세요."}), 500
 
 
 @app.route("/api/stores/geocode", methods=["POST"])

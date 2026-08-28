@@ -51,21 +51,27 @@ async function api(path, options = {}) {
     headers["Content-Type"] = "application/json";
   }
   const res = await fetch(appUrl(`/api${path}`), { ...opts, headers });
+  const raw = await res.text();
+  let data = null;
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      data = null;
+    }
+  }
   if (res.status === 401 && path !== "/admin/login") {
     setToken("");
     showLoggedOut();
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.message || "관리자 로그인이 필요합니다.");
+    throw new Error((data && data.message) || "관리자 로그인이 필요합니다.");
   }
   if (!res.ok) {
-    const data = await res.json().catch(() => null);
-    const text = data ? data.message || data.error || JSON.stringify(data) : await res.text();
-    throw new Error(text || `API ${path} 실패: ${res.status}`);
+    throw new Error(
+      (data && (data.message || data.error)) || raw || `API ${path} 실패: ${res.status}`
+    );
   }
   if (res.status === 204) return null;
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json();
-  return res;
+  return data;
 }
 
 function hasCoords(s) {

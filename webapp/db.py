@@ -174,10 +174,11 @@ CREATE INDEX IF NOT EXISTS idx_inventory_holder ON inventory_items(holder_type);
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH, timeout=15)
+    conn = sqlite3.connect(DB_PATH, timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 60000")
     return conn
 
 
@@ -269,7 +270,10 @@ def migrate_schema(conn) -> None:
         )
 
     # 테스트 계정 1107711(고바야시)은 소속 대리점 없음
-    conn.execute("UPDATE reps SET dealer_id = NULL WHERE employee_code = '1107711'")
+    try:
+        conn.execute("UPDATE reps SET dealer_id = NULL WHERE employee_code = '1107711'")
+    except sqlite3.OperationalError:
+        pass
 
     treasure_cols = _columns(conn, "treasures")
     if treasure_cols and "points" not in treasure_cols:
@@ -481,6 +485,8 @@ def _sync_stores_from_seed(conn) -> None:
 
 def start_store_seed_sync() -> None:
     """Render 포트가 먼저 열리도록 판매점 마스터 동기화는 백그라운드에서 한다."""
+    if not _on_hosted:
+        return
     import threading
 
     def _run() -> None:
@@ -503,8 +509,11 @@ def init_db() -> None:
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
-        migrate_schema(conn)
-        conn.commit()
+        try:
+            migrate_schema(conn)
+            conn.commit()
+        except sqlite3.OperationalError:
+            conn.rollback()
     finally:
         conn.close()
 
