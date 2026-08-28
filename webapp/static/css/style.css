@@ -455,6 +455,42 @@ body.inventory-assist {
 body.inventory-assist .topbar {
   flex: none;
   position: relative;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+#inventoryUploadBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+#inventoryUploadBar #inventoryUploadBtn {
+  width: auto;
+  margin: 0;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#inventoryUploadBar .inventory-upload {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  box-shadow: none;
+}
+
+#inventoryUploadBar .inventory-upload-status {
+  background: none;
+  box-shadow: none;
+  padding: 0;
+  max-width: min(320px, 40vw);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 body.inventory-assist main {
@@ -1179,6 +1215,9 @@ body.inventory-assist #chatMap.treasure-map {
     top: 8px;
     max-width: calc(100% - 16px);
     gap: 6px;
+  }
+  #inventoryUploadBar {
+    display: none !important;
   }
   .chat-composer {
     padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));

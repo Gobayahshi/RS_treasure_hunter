@@ -131,6 +131,8 @@ function showLoggedOut() {
   $("screen-chat-login").classList.remove("hidden");
   $("chat-app").classList.add("hidden");
   $("chatNav").classList.add("hidden");
+  const uploadBar = $("inventoryUploadBar");
+  if (uploadBar) uploadBar.classList.add("hidden");
   const asOf = $("asOfBadge");
   if (asOf) {
     asOf.textContent = "";
@@ -143,6 +145,8 @@ function showLoggedIn(user) {
   $("screen-chat-login").classList.add("hidden");
   $("chat-app").classList.remove("hidden");
   $("chatNav").classList.remove("hidden");
+  const uploadBar = $("inventoryUploadBar");
+  if (uploadBar) uploadBar.classList.remove("hidden");
   const name = inventoryUser.dealer_name || inventoryUser.username || "";
   $("chatUser").textContent = name ? `${name}` : "";
   const adminLink = $("chatAdminLink");

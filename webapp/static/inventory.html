@@ -5,12 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>대리점 재고 - RS-Treasure</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-<link rel="stylesheet" href="css/style.css?v=20260828f" />
+<link rel="stylesheet" href="css/style.css?v=20260828h" />
 </head>
 <body class="admin-page inventory-assist">
 
 <header class="topbar">
   <span class="brand">대리점 재고</span>
+  <div id="inventoryUploadBar" class="hidden">
+    <label class="inventory-upload">
+      재고 엑셀
+      <input id="inventoryFile" type="file" accept=".xlsx,.csv" />
+    </label>
+    <button type="button" id="inventoryUploadBtn">올리기</button>
+    <span id="inventoryUploadStatus" class="inventory-upload-status muted small"></span>
+  </div>
   <nav id="chatNav" class="hidden">
     <span id="asOfBadge" class="as-of-badge muted small hidden"></span>
     <label id="sktDealerWrap" class="skt-dealer-wrap hidden">
@@ -69,11 +77,6 @@
     <div class="inventory-shell">
       <div class="inventory-map-pane">
         <div class="inventory-map-tools">
-          <label class="inventory-upload">
-            재고 엑셀
-            <input id="inventoryFile" type="file" accept=".xlsx,.csv" />
-          </label>
-          <button type="button" id="inventoryUploadBtn">올리기</button>
           <button type="button" id="myLocationBtn">내 위치</button>
           <button type="button" id="areaSelectBtn">영역 선택</button>
           <button type="button" id="areaClearBtn" class="hidden">선택 해제</button>
@@ -92,7 +95,6 @@
             </div>
           </div>
           <button type="button" id="mapLookupBtn">조회</button>
-          <span id="inventoryUploadStatus" class="inventory-upload-status muted small"></span>
         </div>
         <div id="chatMap" class="treasure-map" aria-label="재고 지도"></div>
         <div id="areaTableWrap" class="inventory-area-table-wrap hidden">
@@ -135,6 +137,6 @@
 </main>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="js/inventory-chat.js?v=20260828f"></script>
+<script src="js/inventory-chat.js?v=20260828g"></script>
 </body>
 </html>
