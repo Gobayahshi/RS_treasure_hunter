@@ -169,20 +169,49 @@ function stockPinColor(point) {
   return "#2563eb";
 }
 
+function isTransientServerError(err) {
+  const msg = friendlyError(err);
+  return /응답하지 않습니다|연결하지 못했습니다|파일이 크거나 서버가 바쁩/.test(msg);
+}
+
+function addBotError(err) {
+  if (isTransientServerError(err)) return;
+  addBot(friendlyError(err));
+}
+
+function looksLikeAddress(text, address) {
+  const value = String(text || "").trim();
+  const addr = String(address || "").trim();
+  if (!value) return false;
+  if (addr && value.replace(/\s+/g, "") === addr.replace(/\s+/g, "")) return true;
+  return /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)/.test(
+    value.replace(/\s+/g, "")
+  ) && /(로|길|동|대로|번길)\s*\d/.test(value);
+}
+
+function storeNameOf(point) {
+  const name = String((point && point.name) || "").trim();
+  const holder = String((point && point.holder_name) || "").trim();
+  const addr = String((point && (point.address || point.detail_address)) || "").trim();
+  if (name && !looksLikeAddress(name, addr)) return name;
+  if (holder && !looksLikeAddress(holder, addr)) return holder;
+  return "";
+}
+
 function storeCaptionHtml(point) {
   const stores = (point && point.stores) || [point];
   const first = stores[0] || {};
   const code = escHtml((first.store_code || point.store_code || "").trim());
-  const name = escHtml((first.name || point.name || "").trim());
+  const name = escHtml(storeNameOf(first) || storeNameOf(point));
   const extra = stores.length > 1 ? ` 외 ${stores.length - 1}곳` : "";
-  return `<span class="stock-code">${code}</span> ${name}${extra}`;
+  return `<span class="stock-code">${code}</span>${name ? ` ${name}` : ""}${extra}`;
 }
 
 function storeCaptionText(point) {
   const stores = (point && point.stores) || [point];
   const first = stores[0] || {};
   const code = (first.store_code || point.store_code || "").trim();
-  const name = (first.name || point.name || "").trim();
+  const name = storeNameOf(first) || storeNameOf(point);
   const label = [code, name].filter(Boolean).join(" ");
   if (stores.length > 1) return `${label} 외 ${stores.length - 1}곳`;
   return label;
@@ -230,6 +259,7 @@ function clusterMapPoints(points) {
     g.stores.sort((a, b) => (b.qty || 0) - (a.qty || 0) || String(a.store_code).localeCompare(String(b.store_code)));
     g.store_code = g.stores[0].store_code;
     g.name = g.stores[0].name;
+    g.holder_name = g.stores[0].holder_name;
     const dealerMap = new Map();
     const modelMap = new Map();
     for (const s of g.stores) {
@@ -464,8 +494,27 @@ async function applyAreaBounds(bbox) {
     renderChatMap(data);
     renderAreaTable(data);
   } catch (err) {
-    addBot(friendlyError(err));
+    addBotError(err);
   }
+}
+
+function modelsTableHtml(models) {
+  const rows = (models || []).filter((m) => m && m.qty);
+  if (!rows.length) {
+    return `<div class="muted small">보유기종이 없습니다.</div>`;
+  }
+  const body = rows
+    .map(
+      (m) =>
+        `<tr><td>${escHtml(m.model)}</td><td>${Number(m.qty || 0).toLocaleString("ko-KR")}</td></tr>`
+    )
+    .join("");
+  const total = rows.reduce((sum, m) => sum + (m.qty || 0), 0);
+  return `<div class="map-popup-table-wrap"><table class="map-popup-table">
+    <thead><tr><th>기종</th><th>대수</th></tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr><td>합계 ${rows.length}기종</td><td>${total.toLocaleString("ko-KR")}</td></tr></tfoot>
+  </table></div>`;
 }
 
 function renderChatMap(data, origin, keepView = false) {
@@ -490,18 +539,23 @@ function renderChatMap(data, origin, keepView = false) {
     const marker = L.marker([p.lat, p.lng], { icon: stockIcon(p, isNearest, showLabel) });
     const dist = p.distance_meters != null ? `<div class="distance">${formatKm(p.distance_meters)}</div>` : "";
     const dealers = (p.dealers || []).map((d) => `${escHtml(d.dealer_name)} ${d.qty}대`).join(" · ");
-    const models = (p.models || []).map((m) => `${escHtml(m.model)} ${m.qty}대`).join(" · ");
-    const storeRows = (p.stores || [p]).map((s) => {
-      return `<div class="store-line"><span class="store-code">${escHtml(s.store_code)}</span> ${escHtml(s.name)} <span class="muted">${s.qty}대</span></div>`;
-    }).join("");
+    const storeRows = (p.stores || [p])
+      .map((s) => {
+        const title = storeNameOf(s);
+        return `<div class="store-line"><span class="store-code">${escHtml(s.store_code)}</span>${
+          title ? ` ${escHtml(title)}` : ""
+        } <span class="muted">${s.qty}대</span></div>`;
+      })
+      .join("");
     const addr = [p.address, p.detail_address].filter(Boolean).join(" ");
     marker.bindPopup(
       `<div class="map-popup">
       <div class="store-list">${storeRows}</div>
       <div class="distance">${p.qty}대${p.aged_qty ? ` · 30일+ ${p.aged_qty}대` : ""}</div>
-      ${models ? `<div class="muted small">${models}</div>` : ""}
+      ${modelsTableHtml(p.models)}
       ${dealers ? `<div class="muted small">${dealers}</div>` : ""}${dist}
-      ${addr ? `<div class="muted small store-address">${escHtml(addr)}</div>` : ""}</div>`
+      ${addr ? `<div class="muted small store-address">${escHtml(addr)}</div>` : ""}</div>`,
+      { maxWidth: 360, minWidth: 240 }
     );
     if (!showLabel) {
       marker.bindTooltip(storeCaptionText(p), { direction: "right", offset: [16, 0], opacity: 0.95 });
@@ -644,7 +698,7 @@ async function handleInventoryUpload() {
     try {
       await loadInventoryMap(lastCoords);
     } catch (mapErr) {
-      addBot(friendlyError(mapErr));
+      addBotError(mapErr);
     }
   } catch (e) {
     const raw = friendlyError(e);
@@ -653,7 +707,7 @@ async function handleInventoryUpload() {
         ? "파일이 크거나 서버가 바쁩니다. 잠시 후 다시 올려 주세요."
         : raw;
     status.textContent = msg;
-    addBot(msg);
+    addBotError(e);
   }
 }
 
@@ -917,7 +971,7 @@ function applyMapLookup() {
   catalogPicked = true;
   resetMapStyle();
   closeMultiPickMenus("");
-  loadInventoryMap(lastCoords).catch((err) => addBot(friendlyError(err)));
+  loadInventoryMap(lastCoords).catch((err) => addBotError(err));
 }
 
 function uploadLabel(uploads, dealerId) {
@@ -997,7 +1051,7 @@ function applyHqDealer(dealerId) {
   catalogPicked = false;
   return loadCatalog()
     .then(() => loadInventoryMap(lastCoords))
-    .catch((err) => addBot(friendlyError(err)));
+    .catch((err) => addBotError(err));
 }
 
 function handleHqClick(ev) {
@@ -1014,7 +1068,7 @@ async function requestMyLocation(options = {}) {
   if (btn) btn.classList.add("active");
   if (!navigator.geolocation) {
     if (announce) addBot("이 브라우저는 위치 정보를 지원하지 않아 전체 재고를 표시합니다.");
-    await loadInventoryMap(null).catch((err) => addBot(friendlyError(err)));
+    await loadInventoryMap(null).catch((err) => addBotError(err));
     return;
   }
   navigator.geolocation.getCurrentPosition(
@@ -1028,7 +1082,7 @@ async function requestMyLocation(options = {}) {
           return;
         }
       } catch (err) {
-        addBot(friendlyError(err));
+        addBotError(err);
       }
     },
     async (err) => {
@@ -1041,7 +1095,7 @@ async function requestMyLocation(options = {}) {
           );
         }
       } catch (e) {
-        addBot(friendlyError(e));
+        addBotError(e);
       }
     },
     { enableHighAccuracy: true, timeout: 12000 }
@@ -1122,7 +1176,7 @@ async function sendQuestion(text, coords) {
     }
   } catch (err) {
     removeThinking();
-    addBot(friendlyError(err));
+    addBotError(err);
   }
 }
 

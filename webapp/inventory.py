@@ -522,6 +522,17 @@ def _latest_upload_ids(conn, dealer_id: str | None = None) -> list[str]:
     return [r["id"] for r in rows]
 
 
+def _store_display_name(row, code: str) -> str:
+    store_name = (row["store_name"] or "").strip()
+    holder_name = (row["holder_name"] or "").strip()
+    address = (row["address"] or "").strip()
+    if store_name and store_name != address:
+        return store_name
+    if holder_name and holder_name != address:
+        return holder_name
+    return store_name or holder_name or code
+
+
 def _merge_store_rows(rows) -> list[dict]:
     grouped: dict[str, dict] = {}
     for row in rows:
@@ -536,7 +547,7 @@ def _merge_store_rows(rows) -> list[dict]:
             address = row["address"] or ""
             item = {
                 "store_code": code,
-                "name": row["store_name"] or row["holder_name"] or code,
+                "name": _store_display_name(row, code),
                 "holder_name": row["holder_name"] or "",
                 "address": address,
                 "detail_address": row["detail_address"] or "",
@@ -584,8 +595,9 @@ def _merge_store_rows(rows) -> list[dict]:
             item["_models"][model_key] = item["_models"].get(model_key, 0) + qty
         if row["holder_name"]:
             item["holder_name"] = row["holder_name"]
-        if row["store_name"]:
-            item["name"] = row["store_name"]
+        display = _store_display_name(row, code)
+        if display:
+            item["name"] = display
         if list_code:
             item["store_code"] = list_code
     out = []
@@ -741,6 +753,7 @@ def inventory_map_points(
           AND i.holder_type IN ({placeholders})
           {model_filter_sql}
         GROUP BY i.store_code, i.dealer_id, model_key
+        { "HAVING aged_qty > 0" if aged_only else "" }
         """,
         (*case_params, AGED_DAYS, *upload_ids, *holders, *model_params),
     ).fetchall()

@@ -239,7 +239,7 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
         store_code = pick(row, STORE_CODE_ALIASES).strip().upper()
         address = pick(row, {"기본주소"}) or pick(row, STORE_ADDR_ALIASES)
         detail_address = pick(row, DETAIL_ADDR_ALIASES)
-        name = pick(row, STORE_NAME_ALIASES) or address or store_code
+        name = pick(row, STORE_NAME_ALIASES) or store_code
         dealer_code = pick(row, DEALER_CODE_ALIASES)
         dealer_name = pick(row, DEALER_NAME_ALIASES)
         lat_raw = pick(row, LAT_ALIASES)

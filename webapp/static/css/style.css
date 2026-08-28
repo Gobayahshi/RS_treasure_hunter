@@ -191,7 +191,46 @@ button {
 }
 
 .map-popup {
-  min-width: 160px;
+  min-width: 220px;
+}
+
+.map-popup-table-wrap {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.map-popup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.map-popup-table th,
+.map-popup-table td {
+  padding: 5px 8px;
+  text-align: right;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.map-popup-table th:first-child,
+.map-popup-table td:first-child,
+.map-popup-table tfoot td:first-child {
+  text-align: left;
+}
+
+.map-popup-table thead th {
+  background: #f8fafc;
+  font-weight: 700;
+  color: #4b5563;
+}
+
+.map-popup-table tfoot td {
+  font-weight: 700;
+  background: #f9fafb;
+  border-bottom: none;
 }
 
 .map-popup .store-name {
