@@ -66,8 +66,16 @@ async function api(path, options = {}) {
     throw new Error((data && data.message) || "관리자 로그인이 필요합니다.");
   }
   if (!res.ok) {
+    const fromJson = data && (data.message || data.error);
+    const looksHtml = raw && /^\s*</.test(raw);
+    const gateway = res.status === 502 || res.status === 503 || res.status === 504;
     throw new Error(
-      (data && (data.message || data.error)) || raw || `API ${path} 실패: ${res.status}`
+      fromJson ||
+        (looksHtml || gateway
+          ? "서버가 잠시 응답하지 않습니다. 잠시 후 다시 시도해 주세요."
+          : raw && raw.length > 180
+            ? `요청에 실패했습니다. (${res.status})`
+            : raw || `요청에 실패했습니다. (${res.status})`)
     );
   }
   if (res.status === 204) return null;

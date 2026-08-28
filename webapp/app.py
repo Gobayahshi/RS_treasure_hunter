@@ -76,6 +76,16 @@ def _inject_app_base(html: str) -> str:
     return snippet + html
 
 
+def _static_v(*rels: str) -> str:
+    latest = 0
+    root = Path(app.static_folder)
+    for rel in rels:
+        path = root / rel
+        if path.exists():
+            latest = max(latest, int(path.stat().st_mtime))
+    return str(latest or int(datetime.now().timestamp()))
+
+
 def new_id() -> str:
     return uuid.uuid4().hex
 
@@ -327,7 +337,13 @@ def admin():
 @app.route("/inventory")
 def inventory_page():
     html_path = Path(app.static_folder) / "inventory.html"
-    return Response(_inject_app_base(html_path.read_text(encoding="utf-8")), mimetype="text/html")
+    html = html_path.read_text(encoding="utf-8")
+    v = _static_v("css/style.css", "js/inventory-chat.js")
+    html = re.sub(r"(css/style\.css)(?:\?v=[^\"']*)?", rf"\1?v={v}", html, count=1)
+    html = re.sub(r"(js/inventory-chat\.js)(?:\?v=[^\"']*)?", rf"\1?v={v}", html, count=1)
+    resp = Response(_inject_app_base(html), mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 # ---------------------------------------------------------------------------

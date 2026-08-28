@@ -30,11 +30,15 @@ let mapPinColor = "";
 let mapAgedOnly = false;
 let catalogPicked = false;
 
-const FOCUS_CENTER = [37.55, 127.55];
-const FOCUS_ZOOM = 8;
+const FOCUS_CENTER = [37.55, 127.7];
+const FOCUS_ZOOM = 10;
 const FOCUS_BOUNDS = [
-  [36.85, 126.25],
-  [38.62, 129.35],
+  [36.85, 126.35],
+  [38.45, 129.25],
+];
+const MAP_MAX_BOUNDS = [
+  [36.6, 126.05],
+  [38.7, 129.55],
 ];
 
 function $(id) {
@@ -71,6 +75,16 @@ function escHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
+function friendlyError(err) {
+  const msg = String((err && err.message) || err || "").trim();
+  if (!msg) return "요청에 실패했습니다.";
+  if (/<!DOCTYPE/i.test(msg) || /^\s*</.test(msg) || /bad gateway|502|503|504/i.test(msg)) {
+    return "서버가 잠시 응답하지 않습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  if (msg.length > 180) return `${msg.slice(0, 180)}…`;
+  return msg;
+}
+
 async function api(path, options = {}) {
   const opts = { ...options };
   const headers = authHeaders(opts.headers || {});
@@ -93,8 +107,16 @@ async function api(path, options = {}) {
     throw new Error((data && data.message) || "대리점 로그인이 필요합니다.");
   }
   if (!res.ok) {
+    const fromJson = data && (data.message || data.error);
+    const looksHtml = raw && /^\s*</.test(raw);
+    const gateway = res.status === 502 || res.status === 503 || res.status === 504;
     throw new Error(
-      (data && (data.message || data.error)) || raw || `API ${path} 실패: ${res.status}`
+      fromJson ||
+        (looksHtml || gateway
+          ? "서버가 잠시 응답하지 않습니다. 잠시 후 다시 시도해 주세요."
+          : raw && raw.length > 180
+            ? `요청에 실패했습니다. (${res.status})`
+            : raw || `요청에 실패했습니다. (${res.status})`)
     );
   }
   return data;
@@ -247,12 +269,37 @@ function formatKm(meters) {
   return `${(meters / 1000).toFixed(1)}km`;
 }
 
+function fitLandscapeFocus(map) {
+  if (!map) return false;
+  map.invalidateSize();
+  const size = map.getSize();
+  if (!size.x || !size.y || size.x < 80 || size.y < 80) return false;
+  map.fitBounds(FOCUS_BOUNDS, { padding: [20, 20], maxZoom: 11, animate: false });
+  if (map.getZoom() < 9.5) {
+    map.setView(FOCUS_CENTER, FOCUS_ZOOM, { animate: false });
+  }
+  return true;
+}
+
+function scheduleLandscapeFocus(map, attempt = 0) {
+  if (!map || attempt > 12) return;
+  if (fitLandscapeFocus(map)) return;
+  setTimeout(() => scheduleLandscapeFocus(map, attempt + 1), 80);
+}
+
 function ensureChatMap() {
   if (chatMap) {
     setTimeout(() => chatMap.invalidateSize(), 80);
     return chatMap;
   }
-  chatMap = L.map("chatMap").setView(FOCUS_CENTER, FOCUS_ZOOM);
+  chatMap = L.map("chatMap", {
+    minZoom: 9,
+    maxZoom: 16,
+    zoomSnap: 0.25,
+    maxBounds: MAP_MAX_BOUNDS,
+    maxBoundsViscosity: 1,
+    worldCopyJump: false,
+  }).setView(FOCUS_CENTER, FOCUS_ZOOM);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap",
   }).addTo(chatMap);
@@ -264,7 +311,16 @@ function ensureChatMap() {
     }
   });
   bindAreaDraw(chatMap);
-  setTimeout(() => chatMap.invalidateSize(), 120);
+  const pane = $("chatMap");
+  if (pane && typeof ResizeObserver !== "undefined") {
+    let fitted = false;
+    const ro = new ResizeObserver(() => {
+      chatMap.invalidateSize();
+      if (!fitted && fitLandscapeFocus(chatMap)) fitted = true;
+    });
+    ro.observe(pane);
+  }
+  scheduleLandscapeFocus(chatMap);
   return chatMap;
 }
 
@@ -403,7 +459,7 @@ async function applyAreaBounds(bbox) {
     renderChatMap(data);
     renderAreaTable(data);
   } catch (err) {
-    addBot(String(err.message || err));
+    addBot(friendlyError(err));
   }
 }
 
@@ -477,16 +533,8 @@ function fitChatMap(map, bounds, origin, nearestMarker, data) {
     nearestMarker.openPopup();
   } else if (bounds.length === 1) {
     map.setView(bounds[0], 14);
-  } else if (bounds.length > 1) {
-    const fitted = L.latLngBounds(bounds);
-    const focus = L.latLngBounds(FOCUS_BOUNDS);
-    if (fitted.getSouth() < 36.3 || fitted.getNorth() > 38.75) {
-      map.fitBounds(focus, { padding: [24, 24], maxZoom: 9 });
-    } else {
-      map.fitBounds(fitted, { padding: [28, 28], maxZoom: 11 });
-    }
   } else {
-    map.setView(FOCUS_CENTER, FOCUS_ZOOM);
+    fitLandscapeFocus(map);
   }
   setTimeout(() => map.invalidateSize(), 80);
 }
@@ -590,15 +638,8 @@ async function handleInventoryUpload() {
     if (inventoryUser.can_see_all) loadHqSummary();
     await loadInventoryMap(lastCoords);
   } catch (e) {
-    status.textContent = e.message || "업로드에 실패했습니다.";
+    status.textContent = friendlyError(e);
   }
-}
-
-function pickDealer(username, btn) {
-  $("chatUsername").value = username;
-  document.querySelectorAll(".dealer-pick button").forEach((el) => el.classList.remove("active"));
-  if (btn) btn.classList.add("active");
-  $("chatPassword").focus();
 }
 
 async function handleLogin() {
@@ -621,7 +662,7 @@ async function handleLogin() {
     await showLoggedIn(data);
     greet();
   } catch (e) {
-    err.textContent = e.message || "로그인에 실패했습니다.";
+    err.textContent = friendlyError(e);
     err.classList.remove("hidden");
   }
 }
@@ -850,7 +891,7 @@ function onProductShortChange() {
   resetMapStyle();
   updateMultiPickLabel("productShortBtn", mapProductShorts, "전체");
   fillModelSelect();
-  loadInventoryMap(lastCoords).catch((err) => addBot(String(err.message || err)));
+  loadInventoryMap(lastCoords).catch((err) => addBot(friendlyError(err)));
 }
 
 function onModelNameChange() {
@@ -858,7 +899,7 @@ function onModelNameChange() {
   catalogPicked = true;
   resetMapStyle();
   updateMultiPickLabel("modelNameBtn", mapModelNames, "해당 기종 전체");
-  loadInventoryMap(lastCoords).catch((err) => addBot(String(err.message || err)));
+  loadInventoryMap(lastCoords).catch((err) => addBot(friendlyError(err)));
 }
 
 function uploadLabel(uploads, dealerId) {
@@ -938,7 +979,7 @@ function applyHqDealer(dealerId) {
   catalogPicked = false;
   return loadCatalog()
     .then(() => loadInventoryMap(lastCoords))
-    .catch((err) => addBot(String(err.message || err)));
+    .catch((err) => addBot(friendlyError(err)));
 }
 
 function handleHqClick(ev) {
@@ -955,7 +996,7 @@ async function requestMyLocation(options = {}) {
   if (btn) btn.classList.add("active");
   if (!navigator.geolocation) {
     if (announce) addBot("이 브라우저는 위치 정보를 지원하지 않아 전체 재고를 표시합니다.");
-    await loadInventoryMap(null).catch((err) => addBot(String(err.message || err)));
+    await loadInventoryMap(null).catch((err) => addBot(friendlyError(err)));
     return;
   }
   navigator.geolocation.getCurrentPosition(
@@ -969,7 +1010,7 @@ async function requestMyLocation(options = {}) {
           return;
         }
       } catch (err) {
-        addBot(String(err.message || err));
+        addBot(friendlyError(err));
       }
     },
     async (err) => {
@@ -982,7 +1023,7 @@ async function requestMyLocation(options = {}) {
           );
         }
       } catch (e) {
-        addBot(String(e.message || e));
+        addBot(friendlyError(e));
       }
     },
     { enableHighAccuracy: true, timeout: 12000 }
@@ -1063,7 +1104,7 @@ async function sendQuestion(text, coords) {
     }
   } catch (err) {
     removeThinking();
-    addBot(String(err.message || err));
+    addBot(friendlyError(err));
   }
 }
 
@@ -1092,12 +1133,6 @@ async function restore() {
 
 document.addEventListener("DOMContentLoaded", () => {
   $("chatLoginBtn").addEventListener("click", handleLogin);
-  $("pickYuwon").addEventListener("click", (e) => pickDealer("yuwon", e.currentTarget));
-  $("pickFrisbee").addEventListener("click", (e) => pickDealer("frisbee", e.currentTarget));
-  const pickJieun = $("pickJieun");
-  if (pickJieun) pickJieun.addEventListener("click", (e) => pickDealer("jieun", e.currentTarget));
-  const pickAdmin = $("pickAdmin");
-  if (pickAdmin) pickAdmin.addEventListener("click", (e) => pickDealer("admin", e.currentTarget));
   $("inventoryUploadBtn").addEventListener("click", handleInventoryUpload);
   const productBtn = $("productShortBtn");
   const modelBtn = $("modelNameBtn");
@@ -1129,6 +1164,9 @@ document.addEventListener("DOMContentLoaded", () => {
   if (sktSel) {
     sktSel.addEventListener("change", () => applyHqDealer(sktSel.value || ""));
   }
+  $("chatUsername").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("chatPassword").focus();
+  });
   $("chatPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleLogin();
   });
