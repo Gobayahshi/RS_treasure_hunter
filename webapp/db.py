@@ -195,7 +195,9 @@ def get_conn():
     conn = sqlite3.connect(DB_PATH, timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    # WAL은 -shm 공유메모리를 mmap으로 매핑하는데, Render 영구 디스크(네트워크 블록 스토리지)에서
+    # 이게 disk I/O error를 일으켰다 (2026-09-17). 일반 롤백 저널은 mmap 없이 파일 잠금만 쓴다.
+    conn.execute("PRAGMA journal_mode = DELETE")
     conn.execute("PRAGMA busy_timeout = 60000")
     return conn
 

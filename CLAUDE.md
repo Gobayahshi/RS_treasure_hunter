@@ -20,7 +20,8 @@
 ## 공통
 
 ### 기술 스택과 실행
-- Python 3.9+ / Flask / SQLite(WAL) / 프레임워크 없는 HTML·JS / Leaflet 지도. Node나 별도 DB 서버는 없다.
+- Python 3.9+ / Flask / SQLite(롤백 저널) / 프레임워크 없는 HTML·JS / Leaflet 지도. Node나 별도 DB 서버는 없다.
+  - **WAL 쓰지 않는다:** 2026-09-17 Render 영구 디스크(`/data`, 네트워크 블록 스토리지)에서 WAL의 `-shm` mmap이 `disk I/O error`를 일으켜 로그인을 포함한 모든 쓰기가 실패했다. `db.get_conn()`은 `journal_mode = DELETE`를 쓴다. 되돌리지 않는다.
 - 로컬 실행: `python app.py` (루트). 실제 앱은 `webapp/` 아래에 있다.
 - 테스트: `cd webapp && pip install -r requirements-dev.txt && python -m pytest`
   - 임시 DB로 돌아서 `webapp/rs_treasure.db`를 건드리지 않는다.
