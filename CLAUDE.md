@@ -25,12 +25,16 @@
 - 테스트: `cd webapp && pip install -r requirements-dev.txt && python -m pytest`
   - 임시 DB로 돌아서 `webapp/rs_treasure.db`를 건드리지 않는다.
   - **코드를 고치면 테스트를 추가하고 전부 통과시킨다.**
-- 배포: Render + gunicorn (`Procfile`). 사내 Playground는 `Diyfile.yaml`(`/rs-treasure` 경로).
+- 배포: **Render + gunicorn (`Procfile`)만 대상으로 한다.**
   - `master`에 push하면 운영에 반영될 수 있다. push 전에 사용자에게 확인한다.
+- **사내 Playground는 절대 고려하지 않는다.**
+  - 설계, 구현, 테스트, 검증, 배포 안내 어디에서도 Playground 동작이나 호환성을 따지지 않는다.
+  - 관련 흔적(`Diyfile.yaml`, `CONTEXT_PATH`, `_PrefixMiddleware`, `window.APP_BASE`)은 기존 코드에 남아 있다. 이를 이유로 설계를 바꾸거나 Playground용 코드를 새로 넣지 않는다.
+  - 이 흔적을 지우는 것도 사용자가 요청할 때만 한다.
 
 ### 코드 구조
 ```
-app.py, wsgi.py, Procfile, Diyfile.yaml   실행/배포 진입점
+app.py, wsgi.py, Procfile   실행/배포 진입점 (Diyfile.yaml은 Playground용이라 무시)
 webapp/
   app.py            Flask 라우트 전부 (인증, 보물찾기, 재고, 관리자)
   db.py             SQLite 스키마, 부팅 시 마이그레이션(migrate_schema), 시드 동기화
