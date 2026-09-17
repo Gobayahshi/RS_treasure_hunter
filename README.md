@@ -30,6 +30,9 @@ webapp/
 5. 서버는 수집된 샘플에 아래 규칙을 적용해 신뢰도 점수(0~100)를 계산하고, 자동 승인/관리자 검토/자동 반려로 분기한다.
    - Mock Location 탐지, 반경 체크, GPS 정확도, 체류시간, 이동 일관성, 텔레포트(비정상 이동속도) 탐지, 중복 인증 제한, 디바이스 바인딩, 근무시간 외 이상 패턴
 6. 승인되면 포인트가 적립되고 보물이 사라진다(claimed). 포인트는 `/` 앱의 "포인트" 탭에서, 랭킹은 `/admin`에서 확인할 수 있다.
+7. 자동 승인되지 않은 방문(`pending_review`)은 `/admin`의 **검토 대기 방문**에서 사유·거리·GPS 정확도를 보고 승인/반려한다. 승인하면 자동 승인과 같은 기준으로 포인트가 적립된다.
+
+근무시간 판정과 "오늘 중복 인증" 기준일은 한국 시간(KST)이다. DB에는 UTC로 저장한다.
 
 자세한 규칙은 `webapp/confidence.py`의 `RULES_CONFIG`와 `evaluate_visit_session()`을 참고하세요.
 
@@ -51,6 +54,17 @@ python app.py
 - 관리자 화면: http://localhost:5000/admin
 
 첫 실행 시 `webapp/rs_treasure.db` (SQLite 파일)가 자동 생성됩니다. 초기화하려면 이 파일을 삭제하고 다시 실행하세요.
+
+### 테스트
+
+```bash
+cd webapp
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+규칙엔진(R1~R9), 영업사원 인증, 검토 대기 승인/반려, 리워드 포인트 차감, 재고 엑셀 파싱을 확인합니다.
+테스트는 임시 폴더에 DB를 새로 만들어 돌기 때문에 `webapp/rs_treasure.db`를 건드리지 않습니다.
 
 ### 사용 순서 (데모/테스트)
 
