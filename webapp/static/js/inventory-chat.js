@@ -509,7 +509,7 @@ async function applyAreaBounds(bbox) {
     params.set("east", String(bbox.east));
     const data = await api(`/inventory/map?${params}`);
     applyMapMeta(data);
-    renderChatMap(data);
+    renderChatMap(data, null, true);
     renderAreaTable(data);
   } catch (err) {
     addBotError(err);
@@ -610,6 +610,8 @@ function fitChatMap(map, bounds, origin, nearestMarker, data) {
     nearestMarker.openPopup();
   } else if (bounds.length === 1) {
     map.setView(bounds[0], 14);
+  } else if (bounds.length > 1 && data && data.dealer_id) {
+    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
   } else {
     fitLandscapeFocus(map);
   }
