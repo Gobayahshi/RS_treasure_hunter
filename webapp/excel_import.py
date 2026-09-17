@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 from io import BytesIO
 from typing import Any
 
@@ -52,6 +53,15 @@ def normalize_header(value: Any) -> str:
         .replace("\r", "")
     )
     return raw
+
+
+def normalize_store_code(value: Any) -> str:
+    """판매점코드는 항상 공백 없는 대문자로 저장한다.
+
+    저장할 때 맞춰 두면 조인에서 UPPER()/TRIM()을 쓸 필요가 없고,
+    stores(store_code) 인덱스를 그대로 탄다.
+    """
+    return re.sub(r"\s+", "", cell_str(value)).upper()
 
 
 def _first_header_row(ws: Worksheet) -> tuple[int, dict[str, int]]:
@@ -236,7 +246,7 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
 
     seen_codes: set[str] = set()
     for i, row in enumerate(buckets.get("stores", []), start=2):
-        store_code = pick(row, STORE_CODE_ALIASES).strip().upper()
+        store_code = normalize_store_code(pick(row, STORE_CODE_ALIASES))
         address = pick(row, {"기본주소"}) or pick(row, STORE_ADDR_ALIASES)
         detail_address = pick(row, DETAIL_ADDR_ALIASES)
         name = pick(row, STORE_NAME_ALIASES) or store_code
@@ -264,8 +274,9 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
 
         dealer_id = dealer["id"] if dealer else None
         # P코드 기준으로만 맞춘다. 같은 기본주소(테크노마트 등)를 한 행으로 합치지 않는다.
+        # 코드는 저장할 때 정규화해 두므로 인덱스를 그대로 타는 단순 비교로 찾는다.
         existing = conn.execute(
-            "SELECT * FROM stores WHERE UPPER(TRIM(COALESCE(store_code, ''))) = ?",
+            "SELECT * FROM stores WHERE store_code = ?",
             (store_code,),
         ).fetchone()
 

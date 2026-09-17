@@ -22,7 +22,7 @@
   <section id="screen-admin-login" class="screen">
     <div class="card center-card">
       <h1>관리자 로그인</h1>
-      <p class="muted">관리자만 엑셀 업로드, 보물 심기, 통계 다운로드를 할 수 있습니다.</p>
+      <p class="muted">SKT 총괄은 모든 기능을, SKT 직원은 조회와 대리점 관리자/직원 구분만 할 수 있습니다.</p>
       <input id="adminUsername" type="text" placeholder="관리자 아이디" autocomplete="username" />
       <input id="adminPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
       <button id="adminLoginBtn" class="btn-primary">로그인</button>
@@ -32,7 +32,31 @@
 
   <div id="admin-app" class="hidden">
 
-    <section class="screen">
+    <p id="viewOnlyNotice" class="card muted small hidden">
+      SKT 직원 계정(조회 전용)으로 로그인했습니다. 데이터를 바꾸는 버튼은 보이지 않습니다.
+      영업사원의 대리점 관리자/직원 구분은 아래 영업사원 목록에서 바꿀 수 있습니다.
+    </p>
+
+    <section class="screen" data-super-only>
+      <div class="between">
+        <h2>SKT 직원 계정</h2>
+        <button id="refreshAccountsBtn" class="btn-secondary compact">새로고침</button>
+      </div>
+      <div class="card">
+        <p class="muted small">
+          SKT 직원은 전국 데이터를 조회만 합니다. 재고 화면(/inventory)과 이 관리 화면에 같은 아이디로 로그인합니다.
+        </p>
+        <div class="row">
+          <input id="accountUsername" type="text" placeholder="아이디 (예: 사번)" autocomplete="off" />
+          <input id="accountPassword" type="text" placeholder="초기 비밀번호 (4자 이상)" autocomplete="off" />
+        </div>
+        <button id="createAccountBtn" class="btn-primary">SKT 직원 계정 만들기</button>
+        <p id="accountMessage" class="muted small"></p>
+      </div>
+      <div id="accountList" class="list"></div>
+    </section>
+
+    <section class="screen" data-super-only>
       <h2>재고 엑셀</h2>
       <div class="card">
         <p class="muted small">
@@ -45,7 +69,7 @@
       </div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-super-only>
       <h2>보물 심기</h2>
       <div class="card">
         <p class="muted small">지도를 눌러 위치를 지정하거나, 현재 위치/위경도를 직접 입력하세요. 포인트는 이 보물에만 적용됩니다.</p>
@@ -69,6 +93,18 @@
     </section>
 
     <section class="screen">
+      <div class="between">
+        <h2>검토 대기 방문</h2>
+        <button id="refreshReviewBtn" class="btn-secondary compact">새로고침</button>
+      </div>
+      <p class="muted small">
+        GPS 신뢰점수가 낮아 자동 승인되지 않은 방문입니다. 승인하면 자동 승인과 같은 기준으로 포인트가 적립됩니다.
+      </p>
+      <p id="reviewMessage" class="muted small"></p>
+      <div id="reviewList" class="list"></div>
+    </section>
+
+    <section class="screen">
       <h2>기본 포인트 · 통계</h2>
       <div class="card">
         <p class="muted small">엑셀 스폰 보물(일반/레어)의 기본 포인트입니다. 위에서 직접 심은 보물은 각자 지정한 포인트를 씁니다.</p>
@@ -76,7 +112,7 @@
           <input id="pointsNormal" type="number" min="1" placeholder="일반 포인트" />
           <input id="pointsRare" type="number" min="1" placeholder="레어 포인트" />
         </div>
-        <button id="savePointsBtn" class="btn-secondary">기본 포인트 저장</button>
+        <button id="savePointsBtn" class="btn-secondary" data-super-only>기본 포인트 저장</button>
         <p id="pointsMessage" class="muted small"></p>
         <button id="statsDownloadBtn" class="btn-primary">전체 대리점/영업사원 통계 다운로드</button>
         <p id="statsMessage" class="muted small"></p>
@@ -84,7 +120,7 @@
     </section>
 
     <section class="screen">
-      <h2>관리자 비밀번호</h2>
+      <h2>내 비밀번호</h2>
       <div class="card">
         <input id="adminCurrentPassword" type="password" placeholder="현재 비밀번호" autocomplete="current-password" />
         <input id="adminNewPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
@@ -94,7 +130,7 @@
       </div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-super-only>
       <h2>엑셀 마스터 업로드</h2>
       <div class="card">
         <p class="muted small">
@@ -108,7 +144,7 @@
       </div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-super-only>
       <h2>판매점 빠른 등록 (GPS 테스트용)</h2>
       <div class="card">
         <input id="storeCode" type="text" placeholder="판매점코드" />
@@ -135,13 +171,19 @@
 
     <section class="screen">
       <h2>영업사원</h2>
+      <p class="muted small">
+        영업사원은 곧 대리점 직원입니다. 같은 고유ID로 재고 화면에도 로그인합니다.
+        관리자/직원 구분은 권한 차이 없이 표시용입니다.
+      </p>
+      <input id="repSearch" type="search" placeholder="이름·고유ID·대리점 검색" autocomplete="off" />
+      <p id="repMessage" class="muted small"></p>
       <div id="repList" class="list"></div>
     </section>
 
     <section class="screen">
       <div class="between">
         <h2>판매점 목록</h2>
-        <div>
+        <div data-super-only>
           <button id="geocodeBtn" class="btn-secondary">주소 → 좌표 변환</button>
           <button id="spawnBtn" class="btn-secondary">보물 스폰 실행</button>
         </div>

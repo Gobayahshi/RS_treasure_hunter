@@ -148,11 +148,11 @@ function showLoggedIn(user) {
   $("chat-app").classList.remove("hidden");
   $("chatNav").classList.remove("hidden");
   const uploadBar = $("inventoryUploadBar");
-  if (uploadBar) uploadBar.classList.remove("hidden");
+  // SKT 직원은 조회 전용이라 업로드를 숨긴다. (예전 응답에는 can_upload 가 없어 기본 허용)
+  if (uploadBar) uploadBar.classList.toggle("hidden", inventoryUser.can_upload === false);
   const filterBar = $("inventoryFilterBar");
   if (filterBar) filterBar.classList.remove("hidden");
-  const name = inventoryUser.dealer_name || inventoryUser.username || "";
-  $("chatUser").textContent = name ? `${name}` : "";
+  $("chatUser").textContent = inventoryUserLabel(inventoryUser);
   const adminLink = $("chatAdminLink");
   if (adminLink) adminLink.classList.toggle("hidden", !inventoryUser.can_see_all);
   const hqPanel = $("hqPanel");
@@ -167,6 +167,16 @@ function showLoggedIn(user) {
   const ready = loadCatalog();
   ensureChatMap();
   return ready;
+}
+
+function inventoryUserLabel(user) {
+  if (!user) return "";
+  if (user.role === "dealer") {
+    const roleLabel = user.dealer_role === "manager" ? "관리자" : "직원";
+    return `${user.dealer_name || ""} · ${user.name || user.username} (${roleLabel})`;
+  }
+  if (user.role === "staff") return `SKT 직원 · ${user.username} (조회 전용)`;
+  return `SKT 총괄 · ${user.username}`;
 }
 
 function stockPinColor(point) {

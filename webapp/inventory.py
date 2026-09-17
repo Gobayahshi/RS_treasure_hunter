@@ -11,7 +11,7 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from excel_import import cell_str, normalize_header
+from excel_import import cell_str, normalize_header, normalize_store_code
 from confidence import haversine_distance_meters
 
 HOLDER_CODE_ALIASES = {"보유처매장코드", "판매점코드", "매장코드"}
@@ -157,7 +157,7 @@ def is_inventory_workbook(data: bytes) -> bool:
 
 
 def _item_from_raw(raw: dict[str, str]) -> dict[str, str] | None:
-    store_code = _pick(raw, HOLDER_CODE_ALIASES).strip().upper()
+    store_code = normalize_store_code(_pick(raw, HOLDER_CODE_ALIASES))
     if not store_code:
         return None
     hold_raw = _pick(raw, HOLD_DAYS_ALIASES)
@@ -764,7 +764,7 @@ def inventory_map_points(
             MAX(s.lat) AS lat,
             MAX(s.lng) AS lng
         FROM inventory_items i
-        LEFT JOIN stores s ON UPPER(TRIM(COALESCE(s.store_code, ''))) = UPPER(TRIM(COALESCE(i.store_code, '')))
+        LEFT JOIN stores s ON s.store_code = i.store_code
         WHERE i.upload_id IN ({up_ph})
           AND i.holder_type IN ({placeholders})
           {model_filter_sql}
@@ -922,7 +922,7 @@ def _parse_money(value) -> float | None:
 def inventory_store_price_sum(conn, store_code: str, dealer_id: str | None = None) -> dict:
     """한 판매점 재고의 실구매가 합계."""
     upload_ids, _uploads = _partner_upload_filter(conn, dealer_id)
-    code = re.sub(r"\s+", "", (store_code or "")).upper()
+    code = normalize_store_code(store_code)
     empty = {
         "store_code": code,
         "name": "",
@@ -943,11 +943,10 @@ def inventory_store_price_sum(conn, store_code: str, dealer_id: str | None = Non
             i.holder_name,
             s.address
         FROM inventory_items i
-        LEFT JOIN stores s
-          ON UPPER(TRIM(COALESCE(s.store_code, ''))) = UPPER(TRIM(COALESCE(i.store_code, '')))
+        LEFT JOIN stores s ON s.store_code = i.store_code
         WHERE i.upload_id IN ({",".join("?" * len(upload_ids))})
           AND i.holder_type = 'partner'
-          AND UPPER(REPLACE(TRIM(COALESCE(i.store_code, '')), ' ', '')) = ?
+          AND i.store_code = ?
         """,
         (*upload_ids, code),
     ).fetchall()
@@ -1335,7 +1334,7 @@ def inventory_overview(conn, dealer_id: str | None = None) -> dict:
 
 
 def inventory_dealer_roster(conn) -> dict:
-    """관리자용 전체 대리점 목록. 포털 계정 + 재고를 올린 대리점을 모두 보여 준다."""
+    """관리자용 전체 대리점 목록. 직원이 등록된 대리점 + 재고를 올린 대리점을 모두 보여 준다."""
     upload_ids, uploads = _partner_upload_filter(conn, None)
     stats_by_id: dict[str, dict] = {}
     if upload_ids:
@@ -1359,13 +1358,12 @@ def inventory_dealer_roster(conn) -> dict:
     uploads_by_id = {u.get("dealer_id") or "": u for u in uploads}
 
     names: dict[str, dict] = {}
+    # 재고를 올리는 사람은 대리점 직원(사원 고유ID)이다. 직원이 한 명이라도 있으면 업로드 대상 대리점이다.
     for row in conn.execute(
         """
         SELECT DISTINCT d.id, d.dealer_code, d.name
         FROM dealers d
-        JOIN admins a ON a.dealer_id = d.id
-        WHERE COALESCE(a.role, '') = 'dealer'
-           OR (a.dealer_id IS NOT NULL AND TRIM(a.dealer_id) != '')
+        JOIN reps r ON r.dealer_id = d.id
         ORDER BY d.name
         """
     ):

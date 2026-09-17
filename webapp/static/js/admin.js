@@ -9,6 +9,8 @@ let inventoryMeMarker = null;
 let inventoryRegion = "";
 let inventoryDealer = "";
 let lastInventoryData = null;
+let adminCanEdit = false; // SKT 총괄만 true. SKT 직원은 조회 전용.
+let allReps = [];
 
 function $(id) {
   return document.getElementById(id);
@@ -96,12 +98,20 @@ function showLoggedOut() {
   }
 }
 
-function showLoggedIn(username) {
+function showLoggedIn(user) {
+  const info = user || {};
+  // 예전 서버 응답에는 role 이 없다. 그때는 총괄로 본다.
+  adminCanEdit = info.can_edit !== false;
   $("screen-admin-login").classList.add("hidden");
   $("admin-app").classList.remove("hidden");
   $("adminNav").classList.remove("hidden");
-  $("adminUser").textContent = username ? `${username}님` : "";
-  ensurePlantMap();
+  const roleLabel = adminCanEdit ? "SKT 총괄" : "SKT 직원 · 조회 전용";
+  $("adminUser").textContent = info.username ? `${info.username}님 (${roleLabel})` : "";
+  document.querySelectorAll("[data-super-only]").forEach((el) => {
+    el.classList.toggle("hidden", !adminCanEdit);
+  });
+  if ($("viewOnlyNotice")) $("viewOnlyNotice").classList.toggle("hidden", adminCanEdit);
+  if (adminCanEdit) ensurePlantMap();
   ensureInventoryMap();
 }
 
@@ -122,7 +132,7 @@ async function handleAdminLogin() {
     });
     setToken(data.token);
     $("adminPassword").value = "";
-    showLoggedIn(data.username);
+    showLoggedIn(data);
     await reloadAll();
     startGeocodePolling();
   } catch (e) {
@@ -516,7 +526,7 @@ async function loadPlanted() {
       <div class="muted small">${(t.store_address || "").startsWith("ADMIN/") ? `${Number(t.lat).toFixed(5)}, ${Number(t.lng).toFixed(5)}` : t.store_address || ""}</div>
       <div class="muted small">lat ${Number(t.lat).toFixed(5)}, lng ${Number(t.lng).toFixed(5)} · ${t.award_points}P</div>
       ${
-        claimed
+        claimed || !adminCanEdit
           ? ""
           : `<div class="row planted-actions">
               <input type="number" min="1" value="${t.award_points}" data-points />
@@ -552,6 +562,75 @@ async function loadPlanted() {
         }
       });
     }
+    container.appendChild(el);
+  }
+}
+
+function formatVisitTime(iso) {
+  // 서버는 UTC로 저장한다. 한국 시간으로 보여준다.
+  if (!iso) return "";
+  const date = new Date(`${iso}${/[zZ+]/.test(iso) ? "" : "Z"}`);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString("ko-KR", { timeZone: "Asia/Seoul", hour12: false });
+}
+
+async function loadReviewQueue() {
+  const container = $("reviewList");
+  if (!container) return;
+  const data = await api("/admin/visit-sessions?status=pending_review");
+  const items = data.items || [];
+  container.innerHTML = "";
+  if (!items.length) {
+    container.innerHTML = '<p class="empty">검토 대기 중인 방문이 없습니다.</p>';
+    return;
+  }
+  for (const s of items) {
+    const el = document.createElement("div");
+    el.className = "item-card";
+    const reasons = (s.reasons || []).map((r) => escHtml(r.label)).join(", ") || "사유 없음";
+    const distance =
+      s.first_sample_distance_m === null || s.first_sample_distance_m === undefined
+        ? "거리 정보 없음"
+        : `매장에서 ${s.first_sample_distance_m}m`;
+    el.innerHTML = `
+      <div class="store-name">${escHtml(s.store_name || "")} <span class="muted small">${escHtml(s.address || "")}</span></div>
+      <div class="muted small">
+        ${escHtml(s.rep_name || "")} (${escHtml(s.employee_code || "")}) · ${escHtml(s.dealer_name || "소속 없음")}
+      </div>
+      <div class="muted small">
+        ${escHtml(formatVisitTime(s.ended_at || s.started_at))} · 점수 ${escHtml(s.confidence_score ?? "-")}점 ·
+        ${escHtml(distance)} · 위치 ${escHtml(s.sample_count ?? 0)}건
+      </div>
+      <div class="muted small">사유: ${reasons}</div>
+      ${
+        adminCanEdit
+          ? `<div class="row planted-actions">
+               <button class="btn-secondary compact" data-approve>승인 (포인트 지급)</button>
+               <button class="btn-secondary compact" data-reject>반려</button>
+             </div>`
+          : ""
+      }
+    `;
+    const decide = async (decision) => {
+      const label = decision === "approve" ? "승인" : "반려";
+      if (!confirm(`이 방문을 ${label}할까요?`)) return;
+      try {
+        const res = await api(`/admin/visit-sessions/${s.id}/review`, {
+          method: "POST",
+          body: JSON.stringify({ decision }),
+        });
+        const points = res.point_ledger_entry ? `${res.point_ledger_entry.points}P 지급` : "포인트 지급 없음";
+        const detail = decision === "approve" ? res.note || points : "포인트 없음";
+        $("reviewMessage").textContent = `${label} 완료 · ${detail}`;
+        await Promise.all([loadReviewQueue(), loadLeaderboard()]);
+      } catch (err) {
+        $("reviewMessage").textContent = String(err.message || err);
+      }
+    };
+    const approveBtn = el.querySelector("[data-approve]");
+    const rejectBtn = el.querySelector("[data-reject]");
+    if (approveBtn) approveBtn.addEventListener("click", () => decide("approve"));
+    if (rejectBtn) rejectBtn.addEventListener("click", () => decide("reject"));
     container.appendChild(el);
   }
 }
@@ -592,7 +671,12 @@ async function handleStatsDownload() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `RS_Treasure_stats_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    // toISOString()은 UTC라 한국 시간 오전에는 어제 날짜가 된다. 로컬 날짜를 쓴다.
+    const now = new Date();
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+      now.getDate()
+    ).padStart(2, "0")}`;
+    a.download = `RS_Treasure_stats_${stamp}.xlsx`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -666,21 +750,130 @@ async function loadDealers() {
 }
 
 async function loadReps() {
-  const reps = await api("/reps");
+  allReps = await api("/reps");
+  renderReps();
+}
+
+function renderReps() {
   const container = $("repList");
   container.innerHTML = "";
-  if (reps.length === 0) {
+  if (allReps.length === 0) {
     container.innerHTML = '<p class="empty">등록된 영업사원이 없습니다. 엑셀을 올려주세요.</p>';
     return;
   }
-  for (const r of reps) {
+  const q = String(($("repSearch") || {}).value || "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+  const rows = allReps.filter((r) => {
+    if (!q) return true;
+    return `${r.name}${r.employee_code}${r.dealer_name || ""}${r.dealer_code || ""}`
+      .replace(/\s+/g, "")
+      .toLowerCase()
+      .includes(q);
+  });
+  if (!rows.length) {
+    container.innerHTML = '<p class="empty">검색 결과가 없습니다.</p>';
+    return;
+  }
+  for (const r of rows) {
     const el = document.createElement("div");
     el.className = "item-card";
+    const hasDealer = Boolean(r.dealer_id);
+    const role = r.dealer_role === "manager" ? "manager" : "staff";
     el.innerHTML = `
-      <div class="store-name">${r.name}</div>
-      <div class="muted small">고유ID: ${r.employee_code} · ${r.dealer_name || "소속대리점 없음"} (${r.dealer_code || "-"})</div>
+      <div class="between" style="margin-top:0">
+        <div>
+          <div class="store-name">${escHtml(r.name)}</div>
+          <div class="muted small">고유ID: ${escHtml(r.employee_code)} · ${escHtml(r.dealer_name || "소속대리점 없음")} (${escHtml(r.dealer_code || "-")})</div>
+        </div>
+        ${
+          hasDealer
+            ? `<select data-dealer-role aria-label="대리점 관리자/직원 구분">
+                 <option value="staff"${role === "staff" ? " selected" : ""}>대리점 직원</option>
+                 <option value="manager"${role === "manager" ? " selected" : ""}>대리점 관리자</option>
+               </select>`
+            : '<span class="muted small">재고 화면 사용 불가</span>'
+        }
+      </div>
     `;
+    const select = el.querySelector("[data-dealer-role]");
+    if (select) {
+      select.addEventListener("change", async () => {
+        const next = select.value;
+        select.disabled = true;
+        try {
+          const updated = await api(`/reps/${r.id}/dealer-role`, {
+            method: "PATCH",
+            body: JSON.stringify({ dealer_role: next }),
+          });
+          r.dealer_role = updated.dealer_role;
+          $("repMessage").textContent = `${r.name}님을 ${next === "manager" ? "대리점 관리자" : "대리점 직원"}로 바꿨습니다.`;
+        } catch (err) {
+          select.value = role;
+          $("repMessage").textContent = String(err.message || err);
+        } finally {
+          select.disabled = false;
+        }
+      });
+    }
     container.appendChild(el);
+  }
+}
+
+async function loadAccounts() {
+  const container = $("accountList");
+  if (!container || !adminCanEdit) return;
+  const accounts = await api("/admin/accounts");
+  container.innerHTML = "";
+  for (const a of accounts) {
+    const el = document.createElement("div");
+    el.className = "item-card";
+    const isStaff = a.role === "staff";
+    el.innerHTML = `
+      <div class="between" style="margin-top:0">
+        <div>
+          <div class="store-name">${escHtml(a.username)}</div>
+          <div class="muted small">${isStaff ? "SKT 직원 · 조회 전용" : "SKT 총괄"}</div>
+        </div>
+        ${isStaff ? '<button class="btn-secondary compact" data-remove>삭제</button>' : ""}
+      </div>
+    `;
+    const removeBtn = el.querySelector("[data-remove]");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        if (!confirm(`SKT 직원 계정 '${a.username}'을 삭제할까요? 바로 로그아웃됩니다.`)) return;
+        try {
+          await api(`/admin/accounts/${a.id}`, { method: "DELETE" });
+          $("accountMessage").textContent = `'${a.username}' 계정을 삭제했습니다.`;
+          await loadAccounts();
+        } catch (err) {
+          $("accountMessage").textContent = String(err.message || err);
+        }
+      });
+    }
+    container.appendChild(el);
+  }
+}
+
+async function handleCreateAccount() {
+  const username = $("accountUsername").value.trim();
+  const password = $("accountPassword").value;
+  const msg = $("accountMessage");
+  if (!username || !password) {
+    msg.textContent = "아이디와 초기 비밀번호를 입력해주세요.";
+    return;
+  }
+  try {
+    await api("/admin/accounts", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    $("accountUsername").value = "";
+    $("accountPassword").value = "";
+    msg.textContent = `'${username}' SKT 직원 계정을 만들었습니다. 초기 비밀번호를 본인에게 전달하세요.`;
+    await loadAccounts();
+  } catch (err) {
+    msg.textContent = String(err.message || err);
   }
 }
 
@@ -763,6 +956,8 @@ async function reloadAll() {
     loadGeocodeStatus(),
     loadSettings(),
     loadPlanted(),
+    loadReviewQueue(),
+    loadAccounts(),
     $("inventoryMap") ? loadInventoryMap() : Promise.resolve(),
   ]);
 }
@@ -916,7 +1111,7 @@ async function restoreSession() {
   }
   try {
     const me = await api("/admin/me");
-    showLoggedIn(me.username);
+    showLoggedIn(me);
     await reloadAll();
     startGeocodePolling();
   } catch (_) {
@@ -945,6 +1140,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("spawnBtn").addEventListener("click", handleSpawn);
   $("geocodeBtn").addEventListener("click", handleGeocode);
   $("refreshGeocodeStatusBtn").addEventListener("click", loadGeocodeStatus);
+  if ($("refreshReviewBtn")) $("refreshReviewBtn").addEventListener("click", loadReviewQueue);
+  if ($("refreshAccountsBtn")) $("refreshAccountsBtn").addEventListener("click", loadAccounts);
+  if ($("createAccountBtn")) $("createAccountBtn").addEventListener("click", handleCreateAccount);
+  if ($("repSearch")) $("repSearch").addEventListener("input", renderReps);
   $("importBtn").addEventListener("click", handleImport);
   $("inventoryImportBtn").addEventListener("click", handleInventoryImport);
   if ($("inventoryMapBtn")) $("inventoryMapBtn").addEventListener("click", () => loadInventoryMap());

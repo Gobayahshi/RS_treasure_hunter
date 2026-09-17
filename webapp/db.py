@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS reps (
     employee_code TEXT NOT NULL UNIQUE,
     password_hash TEXT,
     device_id TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    dealer_role TEXT NOT NULL DEFAULT 'staff'
 );
 
 CREATE TABLE IF NOT EXISTS treasures (
@@ -84,6 +85,12 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS rep_sessions (
+    token TEXT PRIMARY KEY,
+    rep_id TEXT NOT NULL REFERENCES reps(id),
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -98,7 +105,9 @@ CREATE TABLE IF NOT EXISTS visit_sessions (
     ended_at TEXT,
     confidence_score REAL,
     status TEXT NOT NULL DEFAULT 'in_progress',
-    flag_reasons TEXT NOT NULL DEFAULT '[]'
+    flag_reasons TEXT NOT NULL DEFAULT '[]',
+    reviewed_at TEXT,
+    reviewed_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS location_samples (
@@ -162,14 +171,23 @@ CREATE TABLE IF NOT EXISTS inventory_items (
 -- 판매점이 수천 건이라 주변 검색/스폰에 필요한 인덱스를 둔다.
 CREATE INDEX IF NOT EXISTS idx_stores_latlng ON stores(lat, lng);
 CREATE INDEX IF NOT EXISTS idx_stores_address ON stores(address);
+-- 재고 조인용. migrate_schema 의 idx_stores_code 는 부분 인덱스라
+-- LEFT JOIN 에서는 쓰이지 못해, 조건 없는 인덱스를 따로 둔다.
+CREATE INDEX IF NOT EXISTS idx_stores_code_lookup ON stores(store_code);
 CREATE INDEX IF NOT EXISTS idx_treasures_store ON treasures(store_id);
 CREATE INDEX IF NOT EXISTS idx_treasures_unclaimed ON treasures(claimed_at);
 CREATE INDEX IF NOT EXISTS idx_samples_session ON location_samples(session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_rep ON visit_sessions(rep_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON visit_sessions(status, ended_at);
 CREATE INDEX IF NOT EXISTS idx_ledger_rep ON point_ledger(rep_id);
+CREATE INDEX IF NOT EXISTS idx_rep_sessions_rep ON rep_sessions(rep_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_store ON inventory_items(store_code);
 CREATE INDEX IF NOT EXISTS idx_inventory_product ON inventory_items(product_short);
 CREATE INDEX IF NOT EXISTS idx_inventory_holder ON inventory_items(holder_type);
+-- 지도/집계는 항상 "최신 업로드 + 보유처 종류"로 먼저 걸러낸다.
+CREATE INDEX IF NOT EXISTS idx_inventory_upload ON inventory_items(upload_id, holder_type);
+CREATE INDEX IF NOT EXISTS idx_inventory_dealer ON inventory_items(dealer_id);
+CREATE INDEX IF NOT EXISTS idx_uploads_dealer ON inventory_uploads(dealer_id, created_at);
 """
 
 
@@ -186,51 +204,21 @@ def _columns(conn, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-DEALER_PORTAL_ACCOUNTS = (
-    ("yuwon", "yuwon", "D14746", "유원"),
-    ("frisbee", "frisbee", "D15051", "프리스비"),
-    ("jieun", "jieun", "D13827", "지은"),
-)
+def _remove_dealer_portal_accounts(conn) -> None:
+    """예전 임시 대리점 계정(yuwon/frisbee/jieun 등)을 지운다.
 
-
-def _ensure_dealer_portal_accounts(conn) -> None:
-    """테스트 대리점 재고 화면 로그인 계정을 만든다. 이미 있으면 비밀번호는 유지한다."""
-    import uuid
-    from datetime import datetime
-
-    from werkzeug.security import generate_password_hash
-
-    now = datetime.utcnow().isoformat()
-    for username, password, code, name in DEALER_PORTAL_ACCOUNTS:
-        dealer = conn.execute("SELECT * FROM dealers WHERE dealer_code = ?", (code,)).fetchone()
-        if not dealer:
-            dealer_id = uuid.uuid4().hex
-            conn.execute(
-                "INSERT INTO dealers (id, dealer_code, name, created_at) VALUES (?, ?, ?, ?)",
-                (dealer_id, code, name, now),
-            )
-            dealer = conn.execute("SELECT * FROM dealers WHERE dealer_code = ?", (code,)).fetchone()
-        existing = conn.execute("SELECT id FROM admins WHERE username = ?", (username,)).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE admins SET dealer_id = ?, role = 'dealer' WHERE id = ?",
-                (dealer["id"], existing["id"]),
-            )
-            continue
-        conn.execute(
-            """
-            INSERT INTO admins (id, username, password_hash, created_at, dealer_id, role)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                f"dealer-{username}",
-                username,
-                generate_password_hash(password),
-                now,
-                dealer["id"],
-                "dealer",
-            ),
-        )
+    대리점 사람은 이제 사원 고유ID(reps)로 재고 화면에 들어온다.
+    대리점 데이터(dealers)와 올라간 재고는 그대로 둔다.
+    """
+    rows = conn.execute(
+        """
+        SELECT id FROM admins
+        WHERE role = 'dealer' OR (dealer_id IS NOT NULL AND dealer_id != '')
+        """
+    ).fetchall()
+    for row in rows:
+        conn.execute("DELETE FROM admin_sessions WHERE admin_id = ?", (row["id"],))
+        conn.execute("DELETE FROM admins WHERE id = ?", (row["id"],))
 
 
 def migrate_schema(conn) -> None:
@@ -260,6 +248,10 @@ def migrate_schema(conn) -> None:
     if rep_cols and "password_hash" not in rep_cols:
         conn.execute("ALTER TABLE reps ADD COLUMN password_hash TEXT")
 
+    # 대리점 관리자/직원 구분 (권한은 같다). SKT 총괄·직원이 관리 화면에서 정한다.
+    if rep_cols and "dealer_role" not in rep_cols:
+        conn.execute("ALTER TABLE reps ADD COLUMN dealer_role TEXT NOT NULL DEFAULT 'staff'")
+
     # 기존 사원 중 비밀번호가 없으면 초기 비밀번호 = 고유ID
     for row in conn.execute(
         "SELECT id, employee_code FROM reps WHERE password_hash IS NULL OR password_hash = ''"
@@ -278,6 +270,27 @@ def migrate_schema(conn) -> None:
     treasure_cols = _columns(conn, "treasures")
     if treasure_cols and "points" not in treasure_cols:
         conn.execute("ALTER TABLE treasures ADD COLUMN points INTEGER")
+
+    # 판매점코드를 공백 없는 대문자로 맞춘다. 조인이 인덱스를 타려면 양쪽 형식이 같아야 한다.
+    # 정규화하면 코드가 겹치는 행이 있을 수 있는데(유니크 인덱스 위반), 그때는 건너뛰고 부팅은 계속한다.
+    for table in ("stores", "inventory_items"):
+        try:
+            conn.execute(
+                f"""
+                UPDATE {table} SET store_code = UPPER(REPLACE(TRIM(store_code), ' ', ''))
+                WHERE store_code IS NOT NULL
+                  AND store_code <> UPPER(REPLACE(TRIM(store_code), ' ', ''))
+                """
+            )
+        except sqlite3.Error:
+            pass  # 재고 테이블이 아직 없거나, 정규화 시 코드가 겹치는 경우
+
+    # 검토 대기 방문을 관리자가 승인/반려한 기록
+    session_cols = _columns(conn, "visit_sessions")
+    if session_cols and "reviewed_at" not in session_cols:
+        conn.execute("ALTER TABLE visit_sessions ADD COLUMN reviewed_at TEXT")
+    if session_cols and "reviewed_by" not in session_cols:
+        conn.execute("ALTER TABLE visit_sessions ADD COLUMN reviewed_by TEXT")
 
     conn.executescript(
         """
@@ -389,7 +402,7 @@ def migrate_schema(conn) -> None:
             ),
         )
 
-    _ensure_dealer_portal_accounts(conn)
+    _remove_dealer_portal_accounts(conn)
 
 
 def _sync_stores_from_seed(conn) -> None:

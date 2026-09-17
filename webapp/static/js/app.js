@@ -79,16 +79,47 @@ function getCurrentPosition() {
   });
 }
 
+function getRepToken() {
+  return localStorage.getItem("rs_rep_token") || "";
+}
+
+function setRepToken(token) {
+  if (token) localStorage.setItem("rs_rep_token", token);
+  else localStorage.removeItem("rs_rep_token");
+}
+
 async function api(path, options) {
-  const res = await fetch(appUrl(`/api${path}`), {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${path} 실패: ${res.status} ${text}`);
+  const opts = options || {};
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  const token = getRepToken();
+  if (token) headers["X-Rep-Token"] = token;
+  const res = await fetch(appUrl(`/api${path}`), { ...opts, headers });
+  const raw = await res.text();
+  let data = null;
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      data = null;
+    }
   }
-  return res.json();
+  if (res.status === 401 && data && data.error === "REP_AUTH_REQUIRED") {
+    // 토큰이 만료됐거나 로그아웃된 상태. 로그인 화면으로 되돌린다.
+    forceRelogin();
+    throw new Error("로그인이 만료되었습니다. 다시 로그인해주세요.");
+  }
+  if (!res.ok) {
+    const message = data && (data.message || data.error);
+    throw new Error(message || `API ${path} 실패: ${res.status}`);
+  }
+  return data;
+}
+
+function forceRelogin() {
+  clearRep();
+  setRepToken("");
+  rep = null;
+  showScreen("login");
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +164,8 @@ async function handleLogin() {
     if (!res.ok) {
       throw new Error(data.message || data.error || `로그인 실패 (${res.status})`);
     }
+    setRepToken(data.token || "");
+    delete data.token; // 토큰은 별도 키에만 보관한다
     rep = data;
     saveRep(rep);
     $("loginPassword").value = "";
@@ -144,9 +177,15 @@ async function handleLogin() {
 }
 
 function handleLogout() {
-  clearRep();
-  rep = null;
-  showScreen("login");
+  const token = getRepToken();
+  if (token) {
+    // 서버 세션도 끊는다. 실패해도 로컬은 지운다.
+    fetch(appUrl("/api/auth/logout"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Rep-Token": token },
+    }).catch(() => {});
+  }
+  forceRelogin();
 }
 
 function enterApp() {
@@ -417,7 +456,7 @@ async function startVisit(store) {
     const deviceId = getOrCreateDeviceId();
     const session = await api("/visit-sessions", {
       method: "POST",
-      body: JSON.stringify({ rep_id: rep.id, store_id: store.id, device_id: deviceId }),
+      body: JSON.stringify({ store_id: store.id, device_id: deviceId }),
     });
 
     visitState = { sessionId: session.id, store, elapsedSeconds: 0, timerId: null };
@@ -536,7 +575,7 @@ function renderRankList(containerId, rows, emptyText, lineFn) {
 }
 
 async function loadRankings() {
-  const data = await api(`/stats/rankings?rep_id=${encodeURIComponent(rep.id)}`);
+  const data = await api("/stats/rankings");
   renderRankList(
     "dealerRankList",
     data.dealers || [],
@@ -556,6 +595,13 @@ async function loadRankings() {
 async function loadRewardsScreen() {
   const data = await api(`/points/${rep.id}`);
   $("totalPoints").textContent = `${data.total}P`;
+  const used = Number(data.used || 0);
+  const balanceEl = $("pointBalance");
+  if (balanceEl) {
+    // 리워드로 쓴 포인트가 있을 때만 사용/잔액을 보여준다.
+    balanceEl.classList.toggle("hidden", used <= 0);
+    balanceEl.textContent = used > 0 ? `사용 ${used}P · 사용 가능 ${data.balance}P` : "";
+  }
   await loadRankings();
 
   const container = $("ledgerList");
@@ -597,19 +643,13 @@ async function handleChangePassword() {
   }
 
   try {
-    const res = await fetch(appUrl("/api/auth/change-password"), {
+    await api("/auth/change-password", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        rep_id: rep.id,
         current_password: currentPassword,
         new_password: newPassword,
       }),
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.message || data.error || `변경 실패 (${res.status})`);
-    }
     $("currentPassword").value = "";
     $("newPassword").value = "";
     $("newPasswordConfirm").value = "";
@@ -656,14 +696,20 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // 비밀번호 기능 도입 시 1회만 재로그인 유도
-  const AUTH_VERSION = "v2-password";
+  // 인증 방식이 바뀔 때 1회만 재로그인 유도 (v3: 로그인 토큰 도입)
+  const AUTH_VERSION = "v3-token";
   if (localStorage.getItem("rs_auth_version") !== AUTH_VERSION) {
     clearRep();
+    setRepToken("");
     localStorage.setItem("rs_auth_version", AUTH_VERSION);
   }
 
   rep = loadStoredRep();
+  if (rep && !getRepToken()) {
+    // 토큰 없이 저장된 예전 로그인 정보는 쓸 수 없다.
+    clearRep();
+    rep = null;
+  }
   if (rep) {
     enterApp();
   } else {

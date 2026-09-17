@@ -5,8 +5,11 @@ GPS 위치 인증 부정행위 방지 규칙 세트 (R1~R9).
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+
+# 세션 시각은 UTC로 저장한다. 근무시간 판정은 한국 시간이어야 해서 변환해서 쓴다.
+KST_OFFSET = timedelta(hours=9)
 
 RULES_CONFIG = {
     "store_radius_meters": 30,
@@ -27,6 +30,13 @@ def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float
     d_lambda = math.radians(lon2 - lon1)
     a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
     return 2 * EARTH_RADIUS_METERS * math.asin(math.sqrt(a))
+
+
+def to_kst(dt: datetime) -> datetime:
+    """UTC(naive 포함) 시각을 한국 시간으로 바꾼다."""
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None) - dt.utcoffset()
+    return dt + KST_OFFSET
 
 
 def speed_kmh(distance_meters: float, elapsed_seconds: float) -> float:
@@ -140,8 +150,9 @@ def evaluate_visit_session(
         score -= 30
         reasons.append("R8_DEVICE_MISMATCH")
 
-    # R9: 근무 시간 외 이상 패턴 (06:00~22:00 외) -> 감점
-    if started_at.hour < 6 or started_at.hour >= 22:
+    # R9: 근무 시간 외 이상 패턴 (한국 시간 06:00~22:00 외) -> 감점
+    local_hour = to_kst(started_at).hour
+    if local_hour < 6 or local_hour >= 22:
         score -= 15
         reasons.append("R9_OFF_HOURS_ACTIVITY")
 
