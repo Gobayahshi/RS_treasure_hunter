@@ -979,6 +979,10 @@ def inventory_store_price_sum(conn, store_code: str, dealer_id: str | None = Non
         "missing_price": missing,
         "by_model": sorted(by_model.values(), key=lambda m: m["model"]),
     }
+
+
+def _partner_upload_filter(conn, dealer_id: str | None = None) -> tuple[list[str], list]:
+    """대리점별 최신 업로드 id 와 업로드 정보. (8af313e 에서 def 줄이 빠져 복구)"""
     upload_ids = _latest_upload_ids(conn, dealer_id or None)
     if not upload_ids:
         return [], []
