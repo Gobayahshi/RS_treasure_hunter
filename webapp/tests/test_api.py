@@ -197,6 +197,33 @@ def test_reward_request_deducts_balance(client, fixtures, rep_token):
     assert wallet["balance"] == 0
 
 
+# ---------------------------------------------------------------------------
+# 판매점 검색 (관리자)
+# ---------------------------------------------------------------------------
+
+
+def test_store_search_returns_paged_shape(client, admin_token, fixtures):
+    H = admin_auth(admin_token)
+    res = client.get("/api/stores", headers=H)
+    assert res.status_code == 200
+    body = res.get_json()
+    assert set(["items", "total", "matched", "limit", "query"]) <= set(body.keys())
+    assert body["total"] >= 1
+    assert len(body["items"]) <= body["limit"]
+
+
+def test_store_search_by_code_and_no_match(client, admin_token, fixtures):
+    H = admin_auth(admin_token)
+
+    found = client.get(f"/api/stores?q={fixtures['store_code']}", headers=H).get_json()
+    assert found["matched"] >= 1
+    assert any(s["store_code"] == fixtures["store_code"] for s in found["items"])
+
+    empty = client.get("/api/stores?q=no-such-store-zzz", headers=H).get_json()
+    assert empty["items"] == []
+    assert empty["matched"] == 0
+
+
 def test_cancelled_reward_returns_points(client, fixtures, rep_token):
     from db import db_session
 

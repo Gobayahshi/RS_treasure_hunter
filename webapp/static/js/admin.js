@@ -11,6 +11,7 @@ let inventoryDealer = "";
 let lastInventoryData = null;
 let adminCanEdit = false; // SKT 총괄만 true. SKT 직원은 조회 전용.
 let allReps = [];
+let activeAdminTab = "ops";
 
 function $(id) {
   return document.getElementById(id);
@@ -98,6 +99,18 @@ function showLoggedOut() {
   }
 }
 
+function showAdminTab(tab) {
+  activeAdminTab = tab;
+  document.querySelectorAll("#admin-app > section.screen[data-tab]").forEach((el) => {
+    el.classList.toggle("tab-hidden", el.dataset.tab !== tab);
+  });
+  document.querySelectorAll("#adminTabs [data-tab-btn]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tabBtn === tab);
+  });
+  // 지도가 숨겨진 탭에서 그려지면 크기가 0으로 굳으므로, 그 탭으로 돌아올 때 다시 맞춘다.
+  if (tab === "ops" && plantMap) setTimeout(() => plantMap.invalidateSize(), 80);
+}
+
 function showLoggedIn(user) {
   const info = user || {};
   // 예전 서버 응답에는 role 이 없다. 그때는 총괄로 본다.
@@ -111,6 +124,7 @@ function showLoggedIn(user) {
     el.classList.toggle("hidden", !adminCanEdit);
   });
   if ($("viewOnlyNotice")) $("viewOnlyNotice").classList.toggle("hidden", adminCanEdit);
+  showAdminTab(activeAdminTab);
   if (adminCanEdit) ensurePlantMap();
   ensureInventoryMap();
 }
@@ -522,8 +536,8 @@ async function loadPlanted() {
     const el = document.createElement("div");
     el.className = "item-card";
     el.innerHTML = `
-      <div class="store-name">${t.store_name || "관리자 보물"} ${claimed ? '<span class="muted small">획득됨</span>' : ""}</div>
-      <div class="muted small">${(t.store_address || "").startsWith("ADMIN/") ? `${Number(t.lat).toFixed(5)}, ${Number(t.lng).toFixed(5)}` : t.store_address || ""}</div>
+      <div class="store-name">${escHtml(t.store_name || "관리자 보물")} ${claimed ? '<span class="muted small">획득됨</span>' : ""}</div>
+      <div class="muted small">${(t.store_address || "").startsWith("ADMIN/") ? `${Number(t.lat).toFixed(5)}, ${Number(t.lng).toFixed(5)}` : escHtml(t.store_address || "")}</div>
       <div class="muted small">lat ${Number(t.lat).toFixed(5)}, lng ${Number(t.lng).toFixed(5)} · ${t.award_points}P</div>
       ${
         claimed || !adminCanEdit
@@ -744,7 +758,7 @@ async function loadDealers() {
   for (const d of dealers) {
     const el = document.createElement("div");
     el.className = "item-card";
-    el.innerHTML = `<div class="store-name">${d.name}</div><div class="muted small">대리점ID: ${d.dealer_code}</div>`;
+    el.innerHTML = `<div class="store-name">${escHtml(d.name)}</div><div class="muted small">대리점ID: ${escHtml(d.dealer_code)}</div>`;
     container.appendChild(el);
   }
 }
@@ -877,21 +891,31 @@ async function handleCreateAccount() {
   }
 }
 
-async function loadStores() {
-  const stores = await api("/stores");
+let storeSearchTimer = null;
+
+function handleStoreSearchInput() {
+  if (storeSearchTimer) clearTimeout(storeSearchTimer);
+  storeSearchTimer = setTimeout(() => loadStores($("storeSearch").value.trim()), 300);
+}
+
+async function loadStores(q = "") {
   const container = $("storeList");
+  const data = await api(`/stores?limit=50${q ? `&q=${encodeURIComponent(q)}` : ""}`);
   container.innerHTML = "";
-  if (stores.length === 0) {
-    container.innerHTML = '<p class="empty">등록된 판매점이 없습니다.</p>';
-    return;
-  }
-  const preview = stores.slice(0, 30);
-  const coded = stores.filter((s) => s.store_code).length;
   const summary = document.createElement("p");
   summary.className = "muted small";
-  summary.textContent = `전체 ${stores.length}곳 (판매점코드 ${coded}곳). 아래는 최근 30곳만 보여 줍니다.`;
+  summary.textContent = q
+    ? `"${q}" 검색 결과 ${data.matched}곳 중 ${data.items.length}곳 표시 (전체 판매점 ${data.total}곳)`
+    : `전체 ${data.total}곳 중 최근 ${data.items.length}곳. 검색어를 입력하면 전체에서 찾습니다.`;
   container.appendChild(summary);
-  for (const s of preview) {
+  if (data.items.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = q ? "검색 결과가 없습니다." : "등록된 판매점이 없습니다.";
+    container.appendChild(empty);
+    return;
+  }
+  for (const s of data.items) {
     const el = document.createElement("div");
     el.className = "item-card";
     const coordText = hasCoords(s)
@@ -942,7 +966,7 @@ async function loadLeaderboard() {
   rows.forEach((r, idx) => {
     const el = document.createElement("div");
     el.className = "rank-row";
-    el.innerHTML = `<span>${idx + 1}. ${r.name} (${r.employee_code})</span><span class="ledger-points">${r.total_points}P</span>`;
+    el.innerHTML = `<span>${idx + 1}. ${escHtml(r.name)} (${escHtml(r.employee_code)})</span><span class="ledger-points">${r.total_points}P</span>`;
     container.appendChild(el);
   });
 }
@@ -1121,6 +1145,9 @@ async function restoreSession() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("#adminTabs [data-tab-btn]").forEach((btn) => {
+    btn.addEventListener("click", () => showAdminTab(btn.dataset.tabBtn));
+  });
   $("adminLoginBtn").addEventListener("click", handleAdminLogin);
   $("adminPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleAdminLogin();
@@ -1144,6 +1171,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("refreshAccountsBtn")) $("refreshAccountsBtn").addEventListener("click", loadAccounts);
   if ($("createAccountBtn")) $("createAccountBtn").addEventListener("click", handleCreateAccount);
   if ($("repSearch")) $("repSearch").addEventListener("input", renderReps);
+  if ($("storeSearch")) $("storeSearch").addEventListener("input", handleStoreSearchInput);
   $("importBtn").addEventListener("click", handleImport);
   $("inventoryImportBtn").addEventListener("click", handleInventoryImport);
   if ($("inventoryMapBtn")) $("inventoryMapBtn").addEventListener("click", () => loadInventoryMap());

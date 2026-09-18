@@ -32,12 +32,18 @@
 
   <div id="admin-app" class="hidden">
 
+    <nav id="adminTabs" class="chip-row admin-tabs">
+      <button type="button" class="chip" data-tab-btn="ops">보물찾기 운영</button>
+      <button type="button" class="chip" data-tab-btn="stores">매장 마스터</button>
+      <button type="button" class="chip" data-tab-btn="account">계정 · 공통</button>
+    </nav>
+
     <p id="viewOnlyNotice" class="card muted small hidden">
       SKT 직원 계정(조회 전용)으로 로그인했습니다. 데이터를 바꾸는 버튼은 보이지 않습니다.
       영업사원의 대리점 관리자/직원 구분은 아래 영업사원 목록에서 바꿀 수 있습니다.
     </p>
 
-    <section class="screen" data-super-only>
+    <section class="screen" data-tab="account" data-super-only>
       <div class="between">
         <h2>SKT 직원 계정</h2>
         <button id="refreshAccountsBtn" class="btn-secondary compact">새로고침</button>
@@ -56,7 +62,7 @@
       <div id="accountList" class="list"></div>
     </section>
 
-    <section class="screen" data-super-only>
+    <section class="screen" data-tab="account" data-super-only>
       <h2>재고 엑셀</h2>
       <div class="card">
         <p class="muted small">
@@ -69,7 +75,7 @@
       </div>
     </section>
 
-    <section class="screen" data-super-only>
+    <section class="screen" data-tab="ops" data-super-only>
       <h2>보물 심기</h2>
       <div class="card">
         <p class="muted small">지도를 눌러 위치를 지정하거나, 현재 위치/위경도를 직접 입력하세요. 포인트는 이 보물에만 적용됩니다.</p>
@@ -87,12 +93,12 @@
       </div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-tab="ops">
       <h2>심은 보물</h2>
       <div id="plantedList" class="list"></div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-tab="ops">
       <div class="between">
         <h2>검토 대기 방문</h2>
         <button id="refreshReviewBtn" class="btn-secondary compact">새로고침</button>
@@ -104,7 +110,7 @@
       <div id="reviewList" class="list"></div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-tab="ops">
       <h2>기본 포인트 · 통계</h2>
       <div class="card">
         <p class="muted small">엑셀 스폰 보물(일반/레어)의 기본 포인트입니다. 위에서 직접 심은 보물은 각자 지정한 포인트를 씁니다.</p>
@@ -119,7 +125,7 @@
       </div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-tab="account">
       <h2>내 비밀번호</h2>
       <div class="card">
         <input id="adminCurrentPassword" type="password" placeholder="현재 비밀번호" autocomplete="current-password" />
@@ -130,7 +136,7 @@
       </div>
     </section>
 
-    <section class="screen" data-super-only>
+    <section class="screen" data-tab="stores" data-super-only>
       <h2>엑셀 마스터 업로드</h2>
       <div class="card">
         <p class="muted small">
@@ -144,7 +150,7 @@
       </div>
     </section>
 
-    <section class="screen" data-super-only>
+    <section class="screen" data-tab="stores" data-super-only>
       <h2>판매점 빠른 등록 (GPS 테스트용)</h2>
       <div class="card">
         <input id="storeCode" type="text" placeholder="판매점코드" />
@@ -162,14 +168,14 @@
       </div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-tab="account">
       <div class="between" style="margin-top:0">
         <h2>대리점</h2>
       </div>
       <div id="dealerList" class="list"></div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-tab="account">
       <h2>영업사원</h2>
       <p class="muted small">
         영업사원은 곧 대리점 직원입니다. 같은 고유ID로 재고 화면에도 로그인합니다.
@@ -180,7 +186,7 @@
       <div id="repList" class="list"></div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-tab="stores">
       <div class="between">
         <h2>판매점 목록</h2>
         <div data-super-only>
@@ -200,10 +206,11 @@
         <p id="geocodeStatusSummary" class="muted small">아직 집계 전입니다.</p>
         <pre id="geocodeStatusLog" class="import-result small"></pre>
       </div>
+      <input id="storeSearch" type="search" placeholder="판매점코드·이름·주소·대리점 검색 (비우면 최근 등록순)" autocomplete="off" />
       <div id="storeList" class="list"></div>
     </section>
 
-    <section class="screen">
+    <section class="screen" data-tab="ops">
       <h2>랭킹보드</h2>
       <div id="leaderboard" class="list"></div>
     </section>

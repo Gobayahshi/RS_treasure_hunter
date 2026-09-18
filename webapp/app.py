@@ -1270,16 +1270,63 @@ def get_rep(rep_id):
 @app.route("/api/stores", methods=["GET"])
 @require_skt
 def list_stores():
+    """판매점이 12,545곳이라 검색어가 없으면 최근 것만, 있으면 그 검색 결과만 내려준다.
+
+    관리자 화면이 매번 전체를 내려받아 30곳만 보여주던 걸 고치는 것.
+    """
+    q = (request.args.get("q") or "").strip()
+    try:
+        limit = int(request.args.get("limit", 30))
+    except (TypeError, ValueError):
+        limit = 30
+    limit = min(max(limit, 1), 200)
+
     with db_session() as conn:
-        rows = conn.execute(
+        total = conn.execute("SELECT COUNT(*) AS c FROM stores").fetchone()["c"]
+
+        where = ""
+        params: list = []
+        if q:
+            like = f"%{q}%"
+            where = """
+                WHERE s.name LIKE ? OR s.store_code LIKE ? OR s.address LIKE ?
+                   OR s.detail_address LIKE ? OR d.name LIKE ? OR d.dealer_code LIKE ?
             """
+            params = [like, like, like, like, like, like]
+
+        rows = conn.execute(
+            f"""
             SELECT s.*, d.dealer_code, d.name as dealer_name
             FROM stores s
             LEFT JOIN dealers d ON d.id = s.dealer_id
+            {where}
             ORDER BY s.created_at DESC
-            """
+            LIMIT ?
+            """,
+            (*params, limit),
         ).fetchall()
-        return jsonify([row_to_dict(r) for r in rows])
+
+        matched = total
+        if q:
+            matched = conn.execute(
+                f"""
+                SELECT COUNT(*) AS c
+                FROM stores s
+                LEFT JOIN dealers d ON d.id = s.dealer_id
+                {where}
+                """,
+                params,
+            ).fetchone()["c"]
+
+        return jsonify(
+            {
+                "items": [row_to_dict(r) for r in rows],
+                "total": total,
+                "matched": matched,
+                "limit": limit,
+                "query": q,
+            }
+        )
 
 
 @app.route("/api/stores", methods=["POST"])
