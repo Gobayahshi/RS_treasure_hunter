@@ -45,9 +45,9 @@
 
   <!-- 지도 + 근처 보물 목록 화면 -->
   <section id="screen-map" class="screen hidden">
-    <div class="screen-header">
+    <div class="screen-header screen-header-stack">
       <h2><span id="repGreeting"></span>님, 환영합니다 👋</h2>
-      <button id="refreshBtn" class="btn-secondary">새로고침</button>
+      <button id="refreshBtn" class="btn-secondary compact">새로고침</button>
     </div>
     <p id="mapError" class="error hidden"></p>
     <div id="treasureMap" class="treasure-map" aria-label="주변 보물 지도"></div>
@@ -68,8 +68,9 @@
       <div id="visitResult" class="hidden">
         <p id="visitResultEmoji" class="result-emoji"></p>
         <h3 id="visitResultTitle"></h3>
+        <p id="visitResultNote" class="muted small hidden"></p>
         <p id="visitResultPoints" class="result-points"></p>
-        <p id="visitResultTier"></p>
+        <p id="visitResultTier" class="tier-badge"></p>
         <p id="visitResultScore" class="muted"></p>
         <p id="visitResultReasons" class="muted small"></p>
         <button id="visitDoneBtn" class="btn-primary">지도로 돌아가기</button>

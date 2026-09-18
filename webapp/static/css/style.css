@@ -7,6 +7,8 @@ body {
   font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
   background: #f8fafc;
   color: #1f2937;
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
 }
 
 .topbar {
@@ -65,6 +67,20 @@ main {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+
+.screen-header-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.screen-header-stack h2 {
+  margin: 0;
+}
+
+.screen-header-stack .btn-secondary {
+  align-self: flex-end;
 }
 
 .card {
@@ -300,7 +316,24 @@ button {
 }
 
 .tier-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
   font-weight: 700;
+  font-size: 13px;
+}
+
+.tier-badge:empty {
+  display: none;
+}
+
+.tier-badge.tier-rare {
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #92400e;
 }
 
 .distance {
@@ -355,8 +388,27 @@ button {
 }
 
 .result-emoji {
-  font-size: 52px;
-  margin: 8px 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+  height: 84px;
+  margin: 4px 0 14px;
+  border-radius: 50%;
+  background: #f3f4f6;
+  font-size: 40px;
+}
+
+.result-approved .result-emoji {
+  background: #dcfce7;
+}
+
+.result-pending .result-emoji {
+  background: #fef3c7;
+}
+
+.result-rejected .result-emoji {
+  background: #fee2e2;
 }
 
 .result-points {
@@ -365,9 +417,15 @@ button {
   color: #16a34a;
 }
 
+#visitResultNote {
+  margin: -4px 0 14px;
+  line-height: 1.5;
+}
+
 .total-card {
   text-align: center;
-  background: #2563eb;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
   color: #fff;
 }
 
@@ -378,19 +436,46 @@ button {
 
 .section-title {
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
+  color: #111827;
   margin: 4px 0 10px;
+  padding-left: 10px;
+  border-left: 3px solid #2563eb;
 }
 
 .ledger-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   background: #fff;
   padding: 12px 16px;
   border-radius: 8px;
 }
 
+.ledger-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ledger-date {
+  font-size: 12px;
+  color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-reason {
+  font-size: 14px;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ledger-points {
+  flex: none;
   color: #16a34a;
   font-weight: 700;
 }

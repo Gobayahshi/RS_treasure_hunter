@@ -27,7 +27,7 @@
   - 임시 DB로 돌아서 `webapp/rs_treasure.db`를 건드리지 않는다.
   - **코드를 고치면 테스트를 추가하고 전부 통과시킨다.**
 - 배포: **Render + gunicorn (`Procfile`)만 대상으로 한다.**
-  - `master`에 push하면 운영에 반영될 수 있다. push 전에 사용자에게 확인한다.
+  - `master`에 push하면 운영에 반영될 수 있다. 중대한 보안 문제나 되돌리기 어려운 변경이 아니면 push 전에 따로 확인받지 않고 진행한다 (2026-09-18 사용자 결정).
 - **사내 Playground는 절대 고려하지 않는다.**
   - 설계, 구현, 테스트, 검증, 배포 안내 어디에서도 Playground 동작이나 호환성을 따지지 않는다.
   - 관련 흔적(`Diyfile.yaml`, `CONTEXT_PATH`, `_PrefixMiddleware`, `window.APP_BASE`)은 기존 코드에 남아 있다. 이를 이유로 설계를 바꾸거나 Playground용 코드를 새로 넣지 않는다.
@@ -84,15 +84,19 @@ webapp/
 
 **파일:** `confidence.py`, `static/index.html` + `js/app.js`, `static/admin.html` + `js/admin.js`, `app.py`의 `/api/treasures/*`, `/api/visit-sessions/*`, `/api/points*`, `/api/rewards*`, `/api/admin/visit-sessions*`
 
-**현재 상태 (2026-09-17)**
+**현재 상태 (2026-09-18)**
 - 방문 인증: 세션 시작 → 1초 간격 위치 샘플 → 완료 시 R1~R9 점수 → `auto_approved` / `pending_review` / `rejected`.
 - `pending_review`는 `/admin`의 "검토 대기 방문"에서 총괄이 승인/반려한다 (`manual_approved` / `manual_rejected`, `reviewed_by/at` 기록). 승인은 자동 승인과 같은 `_grant_visit_points()`를 쓰고, R7(당일 중복) 건은 포인트를 주지 않는다.
 - 포인트 잔액 = 적립 합계 − 리워드(`pending`/`issued`). 취소(`cancelled`)는 잔액으로 돌아온다. 잔액은 저장하지 않고 항상 계산한다 (`_rep_point_balance`).
 - 리워드 신청 API는 있지만 영업사원 화면에 신청 UI는 아직 없다.
+- 레어 등급은 `normal`/`rare` 2단계뿐. 관리자가 포인트 30 이상으로 직접 심거나, "보물 스폰"(`/api/treasures/spawn`) 실행 시 14일 이상 미방문(또는 방문기록 없음) 매장에 자동으로 `rare`가 붙는다. 기본 포인트는 normal 10P / rare 30P (관리자 설정에서 변경 가능).
+- 지도 화면의 "내 위치"는 `watchPosition()`으로 실시간 추적한다 (2026-09-18 이전엔 `getCurrentPosition()` 1회 호출이라 새로고침 전까진 안 움직였음). 매장 목록/거리 재계산은 여전히 새로고침·지도 이동 시에만 한다.
+- 사원 화면 UX 정리: 포인트 내역에서 내부용 `VISIT_VERIFIED:` 접두어를 지우고 압축 날짜/시간(KST)을 보여줌, R1~R9 반려/검토 사유 코드를 한글 문구로 변환(`REASON_LABELS`), 검토 대기 화면에 총괄 검토를 기다린다는 안내 문구 추가, 레어/일반 배지를 색이 있는 pill로, 지도 화면 새로고침 버튼을 환영 문구 아래로 이동.
 
 **결정 사항**
 - 2026-09-16: 근무시간(R9)과 당일 중복(R7)은 한국 시간 기준이다.
 - 2026-09-16: 영업사원 API는 모두 토큰 인증이다. 앱 인증 버전 `v3-token` (바꾸면 전원 재로그인).
+- 2026-09-18: `webapp/static/css/style.css`는 4개 프로젝트가 같이 쓰는 파일이라, 보물찾기 디자인을 다듬을 때 전역 클래스(`.card`, `.btn-primary`, `.topbar` 등)는 건드리지 않고 보물찾기 전용 클래스(`.tier-badge`, `.ledger-row`, `.total-card`, `.result-*`, `.screen-header-stack`)만 수정했다. `.ledger-points`는 admin.js도 같이 쓰므로 그대로 뒀다.
 
 **다음 할 일**
 - 반경 30m / 정확도 100m 기준을 실제 반려 사유(`visit_sessions.flag_reasons`) 데이터로 조정.

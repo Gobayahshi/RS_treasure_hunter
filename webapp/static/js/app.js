@@ -12,15 +12,52 @@ let visitState = null; // { sessionId, store, timerId, elapsedSeconds }
 let treasureMap = null;
 let mapMarkersLayer = null;
 let meMarker = null;
+let meAccuracyCircle = null;
 let suppressMapMoveLoad = false;
 let mapMoveTimer = null;
 let mapLoadSeq = 0;
+let positionWatchId = null;
 
 // ---------------------------------------------------------------------------
 // 유틸
 // ---------------------------------------------------------------------------
 function $(id) {
   return document.getElementById(id);
+}
+
+// 서버는 UTC로 저장한다. 화면에는 한국 시간으로 짧게 보여준다 (예: 9/18 07:30).
+function formatCompactDateTime(iso) {
+  if (!iso) return "";
+  const date = new Date(`${iso}${/[zZ+]/.test(iso) ? "" : "Z"}`);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+  return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+const REASON_LABELS = {
+  NO_SAMPLES: "위치 정보가 수집되지 않았습니다",
+  R1_MOCK_LOCATION_DETECTED: "가상 위치(모의 GPS) 사용이 감지되었습니다",
+  R2_OUT_OF_RADIUS: "매장 반경 밖에서 인증을 시도했습니다",
+  R2_PARTIAL_RADIUS_COVERAGE: "매장 반경 안에 머문 시간이 부족합니다",
+  R3_LOW_GPS_ACCURACY: "GPS 정확도가 낮습니다",
+  R4_INSUFFICIENT_DWELL_TIME: "매장 근처 체류 시간이 부족합니다",
+  R5_MOVEMENT_INCONSISTENCY: "이동 경로가 부자연스럽습니다",
+  R6_TELEPORT_DETECTED: "직전 위치와 비교해 이동 속도가 비정상적입니다",
+  R7_ALREADY_CLAIMED_TODAY: "오늘 이미 인증한 매장입니다 (포인트 미지급)",
+  R8_DEVICE_MISMATCH: "등록된 기기와 다릅니다",
+  R9_OFF_HOURS_ACTIVITY: "근무시간 외 활동입니다",
+};
+
+function formatReasons(reasons) {
+  return (reasons || []).map((r) => REASON_LABELS[r] || r).join(", ");
 }
 
 function appUrl(path) {
@@ -33,6 +70,32 @@ function showScreen(name) {
   document.querySelectorAll(".screen").forEach((el) => el.classList.add("hidden"));
   $(`screen-${name}`).classList.remove("hidden");
   $("topnav").classList.toggle("hidden", name === "login");
+  if (name === "map") {
+    startPositionWatch();
+  } else {
+    stopPositionWatch();
+  }
+}
+
+// 지도 화면에서 "내 위치" 점을 실시간으로 움직인다. 매장 목록/거리는 새로고침 시에만 다시 계산한다.
+function startPositionWatch() {
+  if (!navigator.geolocation || positionWatchId != null) return;
+  positionWatchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      currentPosition = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      if (meMarker) meMarker.setLatLng([currentPosition.lat, currentPosition.lng]);
+      if (meAccuracyCircle) meAccuracyCircle.setLatLng([currentPosition.lat, currentPosition.lng]);
+    },
+    () => {}, // 실시간 갱신 실패는 조용히 무시한다 (최초 위치는 loadTreasures가 이미 가져옴)
+    { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+  );
+}
+
+function stopPositionWatch() {
+  if (positionWatchId != null && navigator.geolocation) {
+    navigator.geolocation.clearWatch(positionWatchId);
+    positionWatchId = null;
+  }
 }
 
 function getOrCreateDeviceId() {
@@ -265,6 +328,7 @@ function renderTreasureMap(treasures, options = {}) {
     map.removeLayer(meMarker);
     meMarker = null;
   }
+  meAccuracyCircle = null;
 
   if (currentPosition) {
     meMarker = L.circleMarker([currentPosition.lat, currentPosition.lng], {
@@ -277,7 +341,7 @@ function renderTreasureMap(treasures, options = {}) {
       .bindPopup("내 위치")
       .addTo(map);
 
-    L.circle([currentPosition.lat, currentPosition.lng], {
+    meAccuracyCircle = L.circle([currentPosition.lat, currentPosition.lng], {
       radius: VISIT_RADIUS_METERS,
       color: "#2563eb",
       weight: 1,
@@ -423,7 +487,7 @@ function renderTreasureList(treasures, totalInRadius, radiusKm = NEARBY_RADIUS_K
     el.className = "item-card";
     el.innerHTML = `
       <div class="item-header">
-        <span class="tier-badge">${t.tier === "rare" ? "⭐ 레어" : "🏅 일반"}${t.award_points ? ` · ${t.award_points}P` : ""}</span>
+        <span class="tier-badge${t.tier === "rare" ? " tier-rare" : ""}">${t.tier === "rare" ? "⭐ 레어" : "🏅 일반"}${t.award_points ? ` · ${t.award_points}P` : ""}</span>
         <span class="distance">${Math.round(t.distanceMeters)}m</span>
       </div>
       <div class="store-name">${treasurePlaceName(t.store)}</div>
@@ -529,11 +593,13 @@ function renderVisitResult(result) {
   const { evaluation, point_ledger_entry, claimed_treasure } = result;
   const approved = evaluation.status === "auto_approved";
   const pending = evaluation.status === "pending_review";
+  const status = approved ? "approved" : pending ? "pending" : "rejected";
 
   $("visitProgressFill").parentElement.classList.add("hidden");
   $("visitProgressText").classList.add("hidden");
   $("visitCancelBtn").classList.add("hidden");
   $("visitResult").classList.remove("hidden");
+  $("visitResult").className = `result-${status}`;
 
   $("visitResultEmoji").textContent = approved ? "🎉" : pending ? "🕵️" : "😥";
   $("visitResultTitle").textContent = approved
@@ -542,14 +608,20 @@ function renderVisitResult(result) {
       ? "관리자 검토 대기 중입니다"
       : "인증에 실패했습니다";
 
+  const noteEl = $("visitResultNote");
+  if (noteEl) {
+    noteEl.textContent = pending
+      ? "제출한 위치 정보 중 확인이 필요한 부분이 있어요. SKT 총괄 담당자가 검토해서 승인하면 포인트가 지급됩니다."
+      : "";
+    noteEl.classList.toggle("hidden", !pending);
+  }
+
   $("visitResultPoints").textContent = point_ledger_entry ? `+${point_ledger_entry.points} 포인트` : "";
-  $("visitResultTier").textContent = claimed_treasure
-    ? claimed_treasure.tier === "rare"
-      ? "⭐ 레어 보물"
-      : "🏅 일반 보물"
-    : "";
+  const tierEl = $("visitResultTier");
+  tierEl.textContent = claimed_treasure ? (claimed_treasure.tier === "rare" ? "⭐ 레어 보물" : "🏅 일반 보물") : "";
+  tierEl.className = claimed_treasure && claimed_treasure.tier === "rare" ? "tier-badge tier-rare" : "tier-badge";
   $("visitResultScore").textContent = `신뢰도 점수: ${Math.round(evaluation.score)}`;
-  $("visitResultReasons").textContent = evaluation.reasons.join(", ");
+  $("visitResultReasons").textContent = formatReasons(evaluation.reasons);
 }
 
 // ---------------------------------------------------------------------------
@@ -613,7 +685,14 @@ async function loadRewardsScreen() {
   for (const l of data.ledgers) {
     const row = document.createElement("div");
     row.className = "ledger-row";
-    row.innerHTML = `<span>${l.reason}</span><span class="ledger-points">+${l.points}P</span>`;
+    const label = l.reason.startsWith("VISIT_VERIFIED:") ? l.reason.slice("VISIT_VERIFIED:".length) : l.reason;
+    row.innerHTML = `
+      <div class="ledger-main">
+        <div class="ledger-date">${formatCompactDateTime(l.created_at)}</div>
+        <div class="ledger-reason">${label}</div>
+      </div>
+      <span class="ledger-points">+${l.points}P</span>
+    `;
     container.appendChild(row);
   }
 }
