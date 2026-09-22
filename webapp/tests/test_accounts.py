@@ -11,6 +11,11 @@ def admin_auth(token):
 
 
 def create_staff(client, admin_token, username=None, password="staff1234"):
+    """SKT 직원 계정을 만들고 첫 로그인 후 초기 비밀번호를 바꾼다.
+
+    발급받은 초기 비밀번호는 바꾸기 전까지 다른 API 가 막히므로(PASSWORD_CHANGE_REQUIRED),
+    실제 사용 흐름대로 한 번 바꿔 둔다.
+    """
     username = username or f"skt{uuid.uuid4().hex[:6]}"
     res = client.post(
         "/api/admin/accounts",
@@ -21,6 +26,12 @@ def create_staff(client, admin_token, username=None, password="staff1234"):
     token = client.post(
         "/api/admin/login", json={"username": username, "password": password}
     ).get_json()["token"]
+    changed = client.post(
+        "/api/admin/change-password",
+        json={"current_password": password, "new_password": f"{password}-set"},
+        headers=admin_auth(token),
+    )
+    assert changed.status_code == 200, changed.get_json()
     return res.get_json(), token
 
 
@@ -211,7 +222,7 @@ def test_staff_views_all_dealers_in_inventory_but_cannot_upload(client, admin_to
     username = f"skt{uuid.uuid4().hex[:6]}"
     create_staff(client, admin_token, username=username)
     body = client.post(
-        "/api/inventory/login", json={"username": username, "password": "staff1234"}
+        "/api/inventory/login", json={"username": username, "password": "staff1234-set"}
     ).get_json()
     assert body["can_see_all"] is True
     assert body["can_upload"] is False

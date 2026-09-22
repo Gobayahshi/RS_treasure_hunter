@@ -119,6 +119,33 @@ main {
   border-top: 1px solid #eee;
 }
 
+/* 보물찾기 로그인 화면 전용: 비밀번호 재설정 */
+.link-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px;
+  background: none;
+  border: none;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.reset-box {
+  text-align: left;
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+}
+
+.reset-box input {
+  margin-top: 8px;
+}
+
 .login-howto-title {
   margin: 0 0 8px;
   font-size: 13px;
@@ -437,6 +464,16 @@ button {
   background: linear-gradient(135deg, #2563eb, #1d4ed8);
   box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
   color: #fff;
+}
+
+.dealer-rank-line {
+  display: inline-block;
+  margin: 6px 0 0;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .total-card h1 {

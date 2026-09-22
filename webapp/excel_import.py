@@ -23,6 +23,7 @@ DEALER_CODE_ALIASES = {"대리점id", "대리점코드", "대리점아이디", "
 DEALER_NAME_ALIASES = {"대리점명", "대리점이름", "소속대리점명", "소속대리점", "dealername", "dealer_name"}
 REP_CODE_ALIASES = {"고유id", "사원고유id", "사원id", "사원코드", "사번", "아이디", "id", "employeecode", "employee_code", "employeeid"}
 REP_NAME_ALIASES = {"이름", "성명", "사원명", "영업사원명", "name"}
+REP_PHONE_ALIASES = {"전화번호", "휴대폰", "휴대폰번호", "핸드폰", "핸드폰번호", "연락처", "phone", "mobile", "tel"}
 STORE_CODE_ALIASES = {"판매점코드", "매장코드", "점포코드", "storecode", "store_code"}
 STORE_NAME_ALIASES = {"판매점명", "매장명", "점포명", "storename", "store_name"}
 STORE_ADDR_ALIASES = {"기본주소", "주소", "판매점주소", "매장주소", "address"}
@@ -53,6 +54,18 @@ def normalize_header(value: Any) -> str:
         .replace("\r", "")
     )
     return raw
+
+
+def normalize_phone(value: Any) -> str:
+    """전화번호는 숫자만 남겨 저장·비교한다.
+
+    엑셀에서 010-1234-5678, 01012345678, +82 10-1234-5678 처럼 제각각 들어온다.
+    국가번호(82)로 시작하면 국내 형식(0으로 시작)으로 맞춘다.
+    """
+    digits = re.sub(r"\D", "", cell_str(value))
+    if digits.startswith("82"):
+        digits = "0" + digits[2:]
+    return digits
 
 
 def normalize_store_code(value: Any) -> str:
@@ -211,36 +224,57 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
     for i, row in enumerate(buckets.get("reps", []), start=2):
         code = pick(row, REP_CODE_ALIASES)
         name = pick(row, REP_NAME_ALIASES)
+        phone = normalize_phone(pick(row, REP_PHONE_ALIASES))
         dealer_code = pick(row, DEALER_CODE_ALIASES)
         dealer_name = pick(row, DEALER_NAME_ALIASES)
-        if not code or not name:
+        if not code:
             summary["reps"]["skipped"] += 1
-            summary["reps"]["errors"].append(f"영업사원 {i}행: 고유ID/이름 필요")
+            summary["reps"]["errors"].append(f"영업사원 {i}행: 고유ID 필요")
+            continue
+        existing = conn.execute("SELECT * FROM reps WHERE employee_code = ?", (code,)).fetchone()
+
+        # SWING ID + 전화번호만 담긴 파일도 받는다. 이미 있는 사원이면 이름/소속 없이 전화번호만 채운다.
+        if existing and not name and not dealer_code and not dealer_name:
+            if not phone:
+                summary["reps"]["skipped"] += 1
+                summary["reps"]["errors"].append(f"영업사원 {code}: 채울 내용이 없음 (이름/소속대리점/전화번호)")
+                continue
+            conn.execute("UPDATE reps SET phone = ? WHERE id = ?", (phone, existing["id"]))
+            summary["reps"]["updated"] += 1
+            continue
+
+        if not name:
+            summary["reps"]["skipped"] += 1
+            summary["reps"]["errors"].append(f"영업사원 {i}행: 이름 필요 (새 사원 등록)")
             continue
         dealer = _find_dealer(conn, dealer_code, dealer_name)
         if not dealer:
             summary["reps"]["skipped"] += 1
             summary["reps"]["errors"].append(f"영업사원 {code}: 소속대리점을 찾을 수 없음 ({dealer_code or dealer_name or '빈값'})")
             continue
-        existing = conn.execute("SELECT * FROM reps WHERE employee_code = ?", (code,)).fetchone()
         if existing:
             conn.execute(
                 "UPDATE reps SET name = ?, dealer_id = ? WHERE id = ?",
                 (name, dealer["id"], existing["id"]),
             )
+            if phone:
+                conn.execute("UPDATE reps SET phone = ? WHERE id = ?", (phone, existing["id"]))
             if not existing["password_hash"]:
+                # 초기 비밀번호 = 고유ID. 첫 로그인 때 반드시 바꾸게 표시한다.
                 conn.execute(
-                    "UPDATE reps SET password_hash = ? WHERE id = ?",
+                    "UPDATE reps SET password_hash = ?, must_change_password = 1 WHERE id = ?",
                     (generate_password_hash(code), existing["id"]),
                 )
             summary["reps"]["updated"] += 1
         else:
             conn.execute(
                 """
-                INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, device_id, created_at)
-                VALUES (?, ?, ?, ?, ?, NULL, ?)
+                INSERT INTO reps (
+                    id, dealer_id, name, employee_code, password_hash, device_id, created_at, phone,
+                    must_change_password
+                ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1)
                 """,
-                (new_id(), dealer["id"], name, code, generate_password_hash(code), now_iso),
+                (new_id(), dealer["id"], name, code, generate_password_hash(code), now_iso, phone or None),
             )
             summary["reps"]["created"] += 1
 
@@ -345,8 +379,11 @@ def build_template_xlsx() -> bytes:
         ),
         (
             "영업사원",
-            ["고유ID", "이름", "소속대리점ID"],
-            [["EMP001", "홍길동", "DEAL001"], ["EMP002", "김영업", "DEAL002"]],
+            ["고유ID", "이름", "소속대리점ID", "전화번호"],
+            [
+                ["EMP001", "홍길동", "DEAL001", "010-1234-5678"],
+                ["EMP002", "김영업", "DEAL002", "01098765432"],
+            ],
             18,
         ),
         (

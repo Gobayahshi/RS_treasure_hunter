@@ -55,7 +55,10 @@ CREATE TABLE IF NOT EXISTS reps (
     password_hash TEXT,
     device_id TEXT,
     created_at TEXT NOT NULL,
-    dealer_role TEXT NOT NULL DEFAULT 'staff'
+    dealer_role TEXT NOT NULL DEFAULT 'staff',
+    phone TEXT,
+    password_reset_at TEXT,
+    must_change_password INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS treasures (
@@ -76,7 +79,8 @@ CREATE TABLE IF NOT EXISTS admins (
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL,
     dealer_id TEXT,
-    role TEXT NOT NULL DEFAULT 'super'
+    role TEXT NOT NULL DEFAULT 'super',
+    must_change_password INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -254,6 +258,24 @@ def migrate_schema(conn) -> None:
     if rep_cols and "dealer_role" not in rep_cols:
         conn.execute("ALTER TABLE reps ADD COLUMN dealer_role TEXT NOT NULL DEFAULT 'staff'")
 
+    # 비밀번호 본인 재설정용. 전화번호는 숫자만 저장한다 (app.normalize_phone).
+    if rep_cols and "phone" not in rep_cols:
+        conn.execute("ALTER TABLE reps ADD COLUMN phone TEXT")
+    if rep_cols and "password_reset_at" not in rep_cols:
+        conn.execute("ALTER TABLE reps ADD COLUMN password_reset_at TEXT")
+
+    # 초기 비밀번호(=고유ID)를 쓰는 사람은 바꿀 때까지 앱을 못 쓰게 막는다.
+    # 매 요청마다 해시를 비교하면 느리므로 플래그로 들고 있는다.
+    if rep_cols and "must_change_password" not in rep_cols:
+        from werkzeug.security import check_password_hash
+
+        conn.execute("ALTER TABLE reps ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+        # 컬럼을 처음 만들 때 한 번만, 지금 초기 비밀번호를 쓰는 사람을 표시한다.
+        for row in conn.execute("SELECT id, employee_code, password_hash FROM reps").fetchall():
+            stored = row["password_hash"] or ""
+            if stored and check_password_hash(stored, row["employee_code"]):
+                conn.execute("UPDATE reps SET must_change_password = 1 WHERE id = ?", (row["id"],))
+
     # 기존 사원 중 비밀번호가 없으면 초기 비밀번호 = 고유ID
     for row in conn.execute(
         "SELECT id, employee_code FROM reps WHERE password_hash IS NULL OR password_hash = ''"
@@ -380,6 +402,9 @@ def migrate_schema(conn) -> None:
         )
 
     admin_cols = _columns(conn, "admins")
+    if admin_cols and "must_change_password" not in admin_cols:
+        # 총괄이 발급한 초기 비밀번호는 첫 로그인 때 반드시 바꾸게 한다.
+        conn.execute("ALTER TABLE admins ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
     if admin_cols and "dealer_id" not in admin_cols:
         conn.execute("ALTER TABLE admins ADD COLUMN dealer_id TEXT")
     if admin_cols and "role" not in admin_cols:

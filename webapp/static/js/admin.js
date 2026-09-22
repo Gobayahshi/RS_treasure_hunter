@@ -799,6 +799,15 @@ function renderReps() {
         <div>
           <div class="store-name">${escHtml(r.name)}</div>
           <div class="muted small">고유ID: ${escHtml(r.employee_code)} · ${escHtml(r.dealer_name || "소속대리점 없음")} (${escHtml(r.dealer_code || "-")})</div>
+          <div class="muted small">
+            ${
+              r.has_phone
+                ? `전화번호 ${escHtml(r.phone_masked)}`
+                : "전화번호 미등록 · 본인 비밀번호 재설정 불가"
+            }${r.must_change_password ? " · 초기 비밀번호 사용 중" : ""}${
+              r.password_reset_at ? ` · 재설정 ${escHtml(formatVisitTime(r.password_reset_at))}` : ""
+            }
+          </div>
         </div>
         ${
           hasDealer

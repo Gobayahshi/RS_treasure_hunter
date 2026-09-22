@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 const VISIT_RADIUS_METERS = 30;
 const NEARBY_RADIUS_KM = 5;
+const MIN_INITIAL_ZOOM = 15;
 const DWELL_SECONDS = 5; // confidence.py RULES_CONFIG.min_dwell_seconds 와 맞출 것
 const SAMPLE_INTERVAL_MS = 1000;
 
@@ -171,6 +172,16 @@ async function api(path, options) {
     forceRelogin();
     throw new Error("로그인이 만료되었습니다. 다시 로그인해주세요.");
   }
+  if (res.status === 403 && data && data.error === "PASSWORD_CHANGE_REQUIRED") {
+    // 초기 비밀번호를 쓰는 동안은 설정 화면 외에는 쓸 수 없다.
+    if (rep) {
+      rep.must_change_password = true;
+      saveRep(rep);
+    }
+    $("passwordHint").classList.remove("hidden");
+    showScreen("settings");
+    throw new Error(data.message);
+  }
   if (!res.ok) {
     const message = data && (data.message || data.error);
     throw new Error(message || `API ${path} 실패: ${res.status}`);
@@ -252,9 +263,9 @@ function handleLogout() {
 }
 
 function enterApp() {
-  const dealer = rep.dealer_name ? ` · ${rep.dealer_name}` : "";
-  $("repGreeting").textContent = `${rep.name}${dealer}`;
-  if (rep.using_initial_password) {
+  $("repGreeting").textContent = rep.dealer_name ? `${rep.dealer_name} · ${rep.name}` : rep.name;
+  if (rep.must_change_password || rep.using_initial_password) {
+    // 초기 비밀번호를 바꾸기 전에는 서버가 다른 기능을 막는다.
     $("passwordHint").classList.remove("hidden");
     showScreen("settings");
   } else {
@@ -393,6 +404,11 @@ function renderTreasureMap(treasures, options = {}) {
       map.setView(bounds[0], 15);
     } else {
       map.fitBounds(bounds, { padding: [36, 36], maxZoom: 16 });
+      // 보물이 넓게 흩어져 있으면 fitBounds가 너무 멀리 빠지므로, 처음 보이는 화면은 최소 이 정도로 가까이 잡는다.
+      // fitBounds 직후 애니메이션 중에 setZoom을 또 걸면 조용히 무시될 수 있어 animate:false로 즉시 반영한다.
+      if (map.getZoom() < MIN_INITIAL_ZOOM) {
+        map.setZoom(MIN_INITIAL_ZOOM, { animate: false });
+      }
     }
     setTimeout(() => {
       suppressMapMoveLoad = false;
@@ -667,6 +683,14 @@ async function loadRankings() {
 async function loadRewardsScreen() {
   const data = await api(`/points/${rep.id}`);
   $("totalPoints").textContent = `${data.total}P`;
+  const rankEl = $("dealerRankLine");
+  if (rankEl) {
+    const hasRank = data.dealer_rank && data.dealer_rep_count;
+    rankEl.classList.toggle("hidden", !hasRank);
+    rankEl.textContent = hasRank
+      ? `${rep.dealer_name ? `${rep.dealer_name} ` : ""}내 순위 ${data.dealer_rank}위 (${data.dealer_rep_count}명 중)`
+      : "";
+  }
   const used = Number(data.used || 0);
   const balanceEl = $("pointBalance");
   if (balanceEl) {
@@ -733,12 +757,78 @@ async function handleChangePassword() {
     $("newPassword").value = "";
     $("newPasswordConfirm").value = "";
     rep.using_initial_password = false;
+    rep.must_change_password = false;
     saveRep(rep);
     $("passwordHint").classList.add("hidden");
     msg.textContent = "비밀번호가 변경되었습니다.";
   } catch (err) {
     msg.textContent = err.message || "비밀번호 변경에 실패했습니다.";
     msg.classList.add("error");
+  }
+}
+
+// 비밀번호 재설정: 고유ID(SWING ID) + 등록된 전화번호가 맞으면 바로 새 비밀번호를 정한다.
+function toggleResetBox() {
+  const box = $("resetBox");
+  const willShow = box.classList.contains("hidden");
+  box.classList.toggle("hidden", !willShow);
+  $("forgotBtn").textContent = willShow ? "닫기" : "비밀번호를 잊으셨나요?";
+  if (willShow) {
+    $("resetCode").value = $("loginCode").value.trim();
+    $("resetMessage").textContent = "";
+    $("resetMessage").classList.remove("error");
+  }
+}
+
+async function handleResetPassword() {
+  const msg = $("resetMessage");
+  const employeeCode = $("resetCode").value.trim();
+  const phone = $("resetPhone").value.trim();
+  const newPassword = $("resetPassword").value;
+  const confirmPassword = $("resetPasswordConfirm").value;
+  msg.classList.remove("error");
+
+  if (!employeeCode || !phone || !newPassword) {
+    msg.textContent = "고유ID, 전화번호, 새 비밀번호를 입력해주세요.";
+    msg.classList.add("error");
+    return;
+  }
+  if (newPassword.length < 4) {
+    msg.textContent = "새 비밀번호는 4자 이상이어야 합니다.";
+    msg.classList.add("error");
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    msg.textContent = "새 비밀번호 확인이 일치하지 않습니다.";
+    msg.classList.add("error");
+    return;
+  }
+
+  const btn = $("resetBtn");
+  btn.disabled = true;
+  msg.textContent = "확인 중...";
+  try {
+    const res = await fetch(appUrl("/api/auth/reset-password"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ employee_code: employeeCode, phone, new_password: newPassword }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || `재설정 실패 (${res.status})`);
+    ["resetPhone", "resetPassword", "resetPasswordConfirm"].forEach((id) => {
+      $(id).value = "";
+    });
+    $("loginCode").value = employeeCode;
+    $("loginPassword").value = "";
+    toggleResetBox();
+    const loginError = $("loginError");
+    loginError.textContent = "비밀번호를 바꿨습니다. 새 비밀번호로 로그인해주세요.";
+    loginError.classList.remove("hidden");
+  } catch (err) {
+    msg.textContent = err.message || "재설정에 실패했습니다.";
+    msg.classList.add("error");
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -752,6 +842,11 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("loginCode").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("loginPassword").focus();
+  });
+  $("forgotBtn").addEventListener("click", toggleResetBox);
+  $("resetBtn").addEventListener("click", handleResetPassword);
+  $("resetPasswordConfirm").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleResetPassword();
   });
   $("logoutBtn").addEventListener("click", handleLogout);
   $("refreshBtn").addEventListener("click", loadTreasures);

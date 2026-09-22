@@ -118,6 +118,41 @@ def test_good_visit_earns_points(client, fixtures, rep_token):
     assert points["balance"] == points["total"]
 
 
+def test_points_include_dealer_rank(client, fixtures, rep_token):
+    complete_visit(client, rep_token, fixtures["store_id"], accuracy=10)
+    mine = client.get(f"/api/points/{fixtures['rep_id']}", headers=auth(rep_token)).get_json()
+    assert mine["dealer_rep_count"] == 2
+    assert mine["dealer_rank"] == 1
+
+    other_token = client.post(
+        "/api/auth/login",
+        json={"employee_code": fixtures["other_employee_code"], "password": fixtures["password"]},
+    ).get_json()["token"]
+    other = client.get(f"/api/points/{fixtures['other_rep_id']}", headers=auth(other_token)).get_json()
+    assert other["dealer_rep_count"] == 2
+    assert other["dealer_rank"] == 2
+
+
+def test_points_dealer_rank_null_without_dealer(client, server):
+    import uuid
+    from datetime import datetime
+    from db import db_session
+
+    code = uuid.uuid4().hex[:7]
+    rep_id = uuid.uuid4().hex
+    with db_session() as conn:
+        conn.execute(
+            "INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, created_at)"
+            " VALUES (?, NULL, '무소속', ?, ?, ?)",
+            (rep_id, code, server.hash_password("pw1234"), datetime.utcnow().isoformat()),
+        )
+    login = client.post("/api/auth/login", json={"employee_code": code, "password": "pw1234"}).get_json()
+    assert login["id"] == rep_id
+    points = client.get(f"/api/points/{rep_id}", headers=auth(login["token"])).get_json()
+    assert points["dealer_rank"] is None
+    assert points["dealer_rep_count"] is None
+
+
 def test_pending_review_can_be_approved(client, fixtures, rep_token, admin_token):
     session_id, result = complete_visit(client, rep_token, fixtures["store_id"], accuracy=250)
     assert result["evaluation"]["status"] == "pending_review"

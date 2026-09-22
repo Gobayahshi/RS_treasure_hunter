@@ -72,8 +72,19 @@ webapp/
 - **다른 대화창이 하지 않을 것:** 새 역할 추가, 새 로그인 화면·경로 추가, 새 세션 테이블 추가, 데코레이터 규칙 변경, 로그인 ID 체계 변경. 필요하면 계정 트랙에 요청하고, 자기 프로젝트 섹션의 "다음 할 일"에 적어 둔다.
 - **다른 대화창이 해도 되는 것:** 이미 있는 데코레이터(`require_admin` 등)를 새 API에 **붙이는 것**. 어떤 역할이 그 기능을 쓸지 애매하면 사용자에게 묻는다.
 - **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/*/login|logout|me|change-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions` 스키마, `/admin`의 계정·영업사원 화면, 재고 로그인 화면.
-- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
-- **아직 정하지 않은 것 (계정 트랙에서 결정):** 판매점(P코드) 계정 발급 방식과 초기 비밀번호(프로젝트 3), 정책 챗봇 이용 범위(프로젝트 4), 재고 화면에서 초기 비밀번호 변경 강제 여부.
+- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py`, `test_password.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
+- **아직 정하지 않은 것 (계정 트랙에서 결정):** 판매점(P코드) 계정 발급 방식과 초기 비밀번호(프로젝트 3), 정책 챗봇 이용 범위(프로젝트 4).
+
+#### 비밀번호 (2026-09-22 결정)
+- **초기 비밀번호는 반드시 바꿔야 한다.** 사원은 고유ID와 같은 비밀번호, SKT 직원은 총괄이 발급한 초기 비밀번호를 쓰는 동안 `_password_gate()`가 모든 API를 403 `PASSWORD_CHANGE_REQUIRED`로 막는다. 열어 두는 API는 `PASSWORD_GATE_EXEMPT`(me/logout/change-password)뿐이다.
+- 매 요청마다 해시를 비교하면 느리므로 `reps.must_change_password` / `admins.must_change_password` 플래그로 판단한다. 비밀번호를 바꾸면 0이 되고, 로그인할 때 실제 값과 어긋나면 맞춰 준다.
+- **본인 재설정:** `POST /api/auth/reset-password` — 고유ID(= SWING ID)와 **등록된 전화번호**가 맞으면 본인이 바로 새 비밀번호를 정한다. 관리자 개입이 없다.
+  - 전화번호는 사내망에서 받은 목록을 마스터 엑셀(영업사원 시트 `전화번호` 열)로 올린다. **고유ID + 전화번호 두 열만 있는 파일도 받는다** (기존 사원의 번호만 채움).
+  - 저장·비교는 숫자만 (`normalize_phone`). 화면에는 `010-****-5678`로만 보여주고 원본은 API로 내리지 않는다.
+  - 실패는 고유ID·IP별 15분에 5회까지(`RESET_MAX_FAILURES`). 넘으면 429. 고유ID가 있는지 없는지 알려주지 않도록 실패 문구는 항상 같다.
+  - 재설정하면 그 사람의 기존 로그인은 모두 끊고 `reps.password_reset_at`에 기록한다.
+  - 새 비밀번호로 고유ID나 전화번호는 쓸 수 없다.
+  - **SKT 계정은 이 방식을 쓰지 않는다** (전화번호가 없다). 총괄이 계정을 지우고 다시 만든다.
 
 ### 반드시 지킬 구현 규칙
 - **시간:** DB에는 UTC로 저장하고, 날짜 경계·근무시간 같은 판단은 한국 시간으로 한다 (`confidence.to_kst`, `app.kst_now`, `app.kst_day_start_utc_iso`).
@@ -136,8 +147,8 @@ webapp/
 - 2026-09-17: 대리점을 고르거나(전체 대리점 목록 클릭), 기종/영역으로 필터링해도 지도가 실제 매장 위치로 이동하지 않고 항상 고정된 기본 화면(`fitLandscapeFocus`, 수도권 중심)으로 리셋되는 버그. 대리점 매장이 기본 화면 밖에 있으면 마커가 하나도 안 보였다 (예: 프리스비 서울/인천/경기 매장 276곳 확인 중 발견). `js/inventory-chat.js`의 `fitChatMap`에서 `data.dealer_id`가 있을 때는 `fitBounds`로 실제 좌표에 맞추도록 수정. 영역 선택(bbox 드래그) 결과도 지도를 옮기지 않도록(`keepView=true`) 고쳤다. 프론트엔드 전용 변경이라 pytest 대상 아님.
 
 **다음 할 일**
-- 재고 화면에서도 초기 비밀번호(=고유ID) 사용 시 변경을 요구 (보물찾기 앱은 이미 요구함).
 - 배포 전: 임시 계정으로 올리던 대리점에 "사원 고유ID로 로그인" 공지.
+- 전화번호 목록(사내망 다운로드)을 마스터 엑셀로 업로드해야 본인 비밀번호 재설정이 동작한다. 그 전에는 전화번호 미등록으로 재설정이 막힌다.
 
 ---
 

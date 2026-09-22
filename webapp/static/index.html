@@ -25,12 +25,24 @@
   <section id="screen-login" class="screen">
     <div class="card center-card">
       <h1>🏆 RS-Treasure Hunter</h1>
-      <p class="muted">엑셀에 등록된 고유ID로 로그인하세요</p>
       <p class="muted small">초기 비밀번호는 고유ID와 같습니다</p>
       <input id="loginCode" type="text" placeholder="고유ID (사원코드)" autocomplete="username" />
       <input id="loginPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
       <button id="loginBtn" class="btn-primary">시작하기</button>
       <p id="loginError" class="error hidden"></p>
+      <button id="forgotBtn" class="link-btn">비밀번호를 잊으셨나요?</button>
+
+      <div id="resetBox" class="reset-box hidden">
+        <p class="login-howto-title">비밀번호 재설정</p>
+        <p class="muted small">고유ID(SWING ID)와 등록된 전화번호가 맞으면 바로 새 비밀번호를 정할 수 있습니다.</p>
+        <input id="resetCode" type="text" placeholder="고유ID (SWING ID)" autocomplete="username" />
+        <input id="resetPhone" type="tel" placeholder="전화번호 (예: 010-1234-5678)" autocomplete="tel" />
+        <input id="resetPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
+        <input id="resetPasswordConfirm" type="password" placeholder="새 비밀번호 확인" autocomplete="new-password" />
+        <button id="resetBtn" class="btn-primary">비밀번호 재설정</button>
+        <p id="resetMessage" class="muted small"></p>
+        <p class="muted small">전화번호가 등록돼 있지 않으면 관리자에게 문의하세요.</p>
+      </div>
       <div class="login-howto">
         <p class="login-howto-title">방문 인증 방법</p>
         <ol>
@@ -46,7 +58,7 @@
   <!-- 지도 + 근처 보물 목록 화면 -->
   <section id="screen-map" class="screen hidden">
     <div class="screen-header screen-header-stack">
-      <h2><span id="repGreeting"></span>님, 환영합니다 👋</h2>
+      <h2><span id="repGreeting"></span>님, 보물을 찾아요 👋</h2>
       <button id="refreshBtn" class="btn-secondary compact">새로고침</button>
     </div>
     <p id="mapError" class="error hidden"></p>
@@ -83,6 +95,7 @@
     <div class="card total-card">
       <p>누적 포인트</p>
       <h1 id="totalPoints">0P</h1>
+      <p id="dealerRankLine" class="dealer-rank-line hidden"></p>
       <p id="pointBalance" class="muted small hidden"></p>
     </div>
 

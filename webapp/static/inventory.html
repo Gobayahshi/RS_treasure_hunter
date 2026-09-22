@@ -59,6 +59,32 @@
       <input id="chatPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
       <button type="button" id="chatLoginBtn" class="btn-primary">시작하기</button>
       <p id="chatLoginError" class="error hidden"></p>
+      <button type="button" id="chatForgotBtn" class="link-btn">비밀번호를 잊으셨나요?</button>
+
+      <div id="chatResetBox" class="reset-box hidden">
+        <p class="login-howto-title">비밀번호 재설정</p>
+        <p class="muted small">고유ID(SWING ID)와 등록된 전화번호가 맞으면 바로 새 비밀번호를 정할 수 있습니다.</p>
+        <input id="chatResetCode" type="text" placeholder="고유ID (SWING ID)" autocomplete="username" />
+        <input id="chatResetPhone" type="tel" placeholder="전화번호 (예: 010-1234-5678)" autocomplete="tel" />
+        <input id="chatResetPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
+        <input id="chatResetPasswordConfirm" type="password" placeholder="새 비밀번호 확인" autocomplete="new-password" />
+        <button type="button" id="chatResetBtn" class="btn-primary">비밀번호 재설정</button>
+        <p id="chatResetMessage" class="muted small"></p>
+        <p class="muted small">SKT 계정은 재설정 대상이 아닙니다. 총괄에게 문의하세요.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="screen-chat-password" class="screen hidden">
+    <div class="card center-card">
+      <h1>비밀번호 변경</h1>
+      <p class="muted">초기 비밀번호를 사용 중입니다. 새 비밀번호를 정해야 재고 화면을 쓸 수 있습니다.</p>
+      <input id="chatCurrentPassword" type="password" placeholder="현재 비밀번호" autocomplete="current-password" />
+      <input id="chatNewPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
+      <input id="chatNewPasswordConfirm" type="password" placeholder="새 비밀번호 확인" autocomplete="new-password" />
+      <button type="button" id="chatChangePasswordBtn" class="btn-primary">변경하고 시작하기</button>
+      <p id="chatPasswordMessage" class="muted small"></p>
+      <button type="button" id="chatPasswordLogoutBtn" class="link-btn">로그아웃</button>
     </div>
   </section>
 

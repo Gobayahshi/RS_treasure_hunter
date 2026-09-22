@@ -111,6 +111,11 @@ async function api(path, options = {}) {
     showLoggedOut();
     throw new Error((data && data.message) || "대리점 로그인이 필요합니다.");
   }
+  if (res.status === 403 && data && data.error === "PASSWORD_CHANGE_REQUIRED") {
+    // 초기 비밀번호를 바꾸기 전까지는 변경 화면만 쓸 수 있다.
+    showPasswordChange({ ...inventoryUser, must_change_password: true });
+    throw new Error(data.message);
+  }
   if (!res.ok) {
     const fromJson = data && (data.message || data.error);
     const looksHtml = raw && /^\s*</.test(raw);
@@ -129,6 +134,8 @@ async function api(path, options = {}) {
 
 function showLoggedOut() {
   $("screen-chat-login").classList.remove("hidden");
+  const passwordScreen = $("screen-chat-password");
+  if (passwordScreen) passwordScreen.classList.add("hidden");
   $("chat-app").classList.add("hidden");
   $("chatNav").classList.add("hidden");
   const uploadBar = $("inventoryUploadBar");
@@ -142,8 +149,60 @@ function showLoggedOut() {
   }
 }
 
+// 초기 비밀번호를 쓰는 동안에는 서버가 재고 API를 막는다. 변경 화면만 보여준다.
+function showPasswordChange(user) {
+  inventoryUser = user || inventoryUser;
+  $("screen-chat-login").classList.add("hidden");
+  $("screen-chat-password").classList.remove("hidden");
+  $("chat-app").classList.add("hidden");
+  $("chatNav").classList.add("hidden");
+  const uploadBar = $("inventoryUploadBar");
+  if (uploadBar) uploadBar.classList.add("hidden");
+  const filterBar = $("inventoryFilterBar");
+  if (filterBar) filterBar.classList.add("hidden");
+}
+
+async function handleChangePassword() {
+  const msg = $("chatPasswordMessage");
+  const current = $("chatCurrentPassword").value;
+  const next = $("chatNewPassword").value;
+  const confirm = $("chatNewPasswordConfirm").value;
+  msg.classList.remove("error");
+  if (!current || !next) {
+    msg.textContent = "현재/새 비밀번호를 입력해주세요.";
+    return;
+  }
+  if (next.length < 4) {
+    msg.textContent = "새 비밀번호는 4자 이상이어야 합니다.";
+    return;
+  }
+  if (next !== confirm) {
+    msg.textContent = "새 비밀번호 확인이 일치하지 않습니다.";
+    return;
+  }
+  // 대리점 직원은 사원 계정, SKT는 관리자 계정이라 바꾸는 API가 다르다.
+  const path = inventoryUser.role === "dealer" ? "/auth/change-password" : "/admin/change-password";
+  try {
+    await api(path, {
+      method: "POST",
+      body: JSON.stringify({ current_password: current, new_password: next }),
+    });
+    ["chatCurrentPassword", "chatNewPassword", "chatNewPasswordConfirm"].forEach((id) => {
+      $(id).value = "";
+    });
+    $("screen-chat-password").classList.add("hidden");
+    const me = await api("/inventory/me");
+    await showLoggedIn(me);
+    greet();
+  } catch (err) {
+    msg.textContent = friendlyError(err);
+    msg.classList.add("error");
+  }
+}
+
 function showLoggedIn(user) {
   inventoryUser = user || inventoryUser;
+  $("screen-chat-password").classList.add("hidden");
   $("screen-chat-login").classList.add("hidden");
   $("chat-app").classList.remove("hidden");
   $("chatNav").classList.remove("hidden");
@@ -838,11 +897,76 @@ async function handleLogin() {
     });
     setToken(data.token);
     $("chatPassword").value = "";
+    if (data.must_change_password) {
+      showPasswordChange(data);
+      return;
+    }
     await showLoggedIn(data);
     greet();
   } catch (e) {
     err.textContent = friendlyError(e);
     err.classList.remove("hidden");
+  }
+}
+
+function toggleResetBox() {
+  const box = $("chatResetBox");
+  const willShow = box.classList.contains("hidden");
+  box.classList.toggle("hidden", !willShow);
+  $("chatForgotBtn").textContent = willShow ? "닫기" : "비밀번호를 잊으셨나요?";
+  if (willShow) {
+    $("chatResetCode").value = $("chatUsername").value.trim();
+    $("chatResetMessage").textContent = "";
+    $("chatResetMessage").classList.remove("error");
+  }
+}
+
+async function handleResetPassword() {
+  const msg = $("chatResetMessage");
+  const employeeCode = $("chatResetCode").value.trim();
+  const phone = $("chatResetPhone").value.trim();
+  const newPassword = $("chatResetPassword").value;
+  const confirmPassword = $("chatResetPasswordConfirm").value;
+  msg.classList.remove("error");
+
+  if (!employeeCode || !phone || !newPassword) {
+    msg.textContent = "고유ID, 전화번호, 새 비밀번호를 입력해주세요.";
+    msg.classList.add("error");
+    return;
+  }
+  if (newPassword.length < 4) {
+    msg.textContent = "새 비밀번호는 4자 이상이어야 합니다.";
+    msg.classList.add("error");
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    msg.textContent = "새 비밀번호 확인이 일치하지 않습니다.";
+    msg.classList.add("error");
+    return;
+  }
+
+  const btn = $("chatResetBtn");
+  btn.disabled = true;
+  msg.textContent = "확인 중...";
+  try {
+    await api("/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ employee_code: employeeCode, phone, new_password: newPassword }),
+    });
+    ["chatResetPhone", "chatResetPassword", "chatResetPasswordConfirm"].forEach((id) => {
+      $(id).value = "";
+    });
+    $("chatUsername").value = employeeCode;
+    $("chatPassword").value = "";
+    toggleResetBox();
+    const loginError = $("chatLoginError");
+    loginError.textContent = "비밀번호를 바꿨습니다. 새 비밀번호로 로그인해주세요.";
+    loginError.classList.remove("hidden");
+  } catch (err) {
+    msg.textContent = friendlyError(err);
+    msg.classList.add("error");
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -1413,6 +1537,10 @@ async function restore() {
   }
   try {
     const me = await api("/inventory/me");
+    if (me.must_change_password) {
+      showPasswordChange(me);
+      return;
+    }
     await showLoggedIn(me);
     greet();
   } catch (_) {
@@ -1423,6 +1551,10 @@ async function restore() {
 
 document.addEventListener("DOMContentLoaded", () => {
   $("chatLoginBtn").addEventListener("click", handleLogin);
+  if ($("chatForgotBtn")) $("chatForgotBtn").addEventListener("click", toggleResetBox);
+  if ($("chatResetBtn")) $("chatResetBtn").addEventListener("click", handleResetPassword);
+  if ($("chatChangePasswordBtn")) $("chatChangePasswordBtn").addEventListener("click", handleChangePassword);
+  if ($("chatPasswordLogoutBtn")) $("chatPasswordLogoutBtn").addEventListener("click", handleLogout);
   $("inventoryUploadBtn").addEventListener("click", handleInventoryUpload);
   const lookupBtn = $("mapLookupBtn");
   if (lookupBtn) lookupBtn.addEventListener("click", applyMapLookup);

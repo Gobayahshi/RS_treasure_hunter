@@ -25,6 +25,7 @@ from db import db_session, init_db, start_store_seed_sync
 from excel_import import (
     build_stats_xlsx,
     build_template_xlsx,
+    normalize_phone,
     normalize_store_code,
     parse_uploads,
     upsert_masters,
@@ -131,12 +132,23 @@ def mask_person_name(name: str) -> str:
     return text[0] + ("*" * (len(text) - 2)) + text[-1]
 
 
+def mask_phone(phone: str) -> str:
+    """010-****-5678 형태로만 보여준다. 전체 번호는 화면에 내리지 않는다."""
+    digits = normalize_phone(phone)
+    if len(digits) < 7:
+        return ""
+    return f"{digits[:3]}-****-{digits[-4:]}"
+
+
 def public_rep(row) -> dict:
-    """API 응답용. 비밀번호 해시는 절대 내려보내지 않는다."""
+    """API 응답용. 비밀번호 해시와 전화번호 원본은 절대 내려보내지 않는다."""
     data = row_to_dict(row)
     if not data:
         return data
     data.pop("password_hash", None)
+    phone = data.pop("phone", None)
+    data["has_phone"] = bool(normalize_phone(phone))
+    data["phone_masked"] = mask_phone(phone)
     return data
 
 
@@ -255,6 +267,30 @@ def _grant_visit_points(conn, session_id: str, rep_id: str, store) -> tuple[dict
 SKT_ROLES = {"super", "staff"}
 DEALER_ROLES = {"manager", "staff"}
 
+# 초기 비밀번호를 쓰는 동안에도 열어 두는 API. 비밀번호를 바꾸려면 필요하다.
+PASSWORD_GATE_EXEMPT = {
+    "rep_me",
+    "rep_logout",
+    "change_password",
+    "inventory_me",
+    "inventory_logout",
+    "admin_me",
+    "admin_logout",
+    "admin_change_password",
+}
+
+
+def _password_gate(must_change: bool):
+    """초기 비밀번호를 바꾸기 전에는 다른 기능을 쓰지 못하게 막는다."""
+    if not must_change or request.endpoint in PASSWORD_GATE_EXEMPT:
+        return None
+    return jsonify(
+        {
+            "error": "PASSWORD_CHANGE_REQUIRED",
+            "message": "초기 비밀번호를 사용 중입니다. 새 비밀번호를 정한 뒤 이용해주세요.",
+        }
+    ), 403
+
 
 def _admin_from_token(conn, token: str):
     """SKT 계정(총괄/직원) 세션. 역할이 SKT 가 아니면 로그인으로 인정하지 않는다."""
@@ -263,6 +299,7 @@ def _admin_from_token(conn, token: str):
     row = conn.execute(
         """
         SELECT a.id, a.username, COALESCE(NULLIF(a.role, ''), 'super') AS role,
+               COALESCE(a.must_change_password, 0) AS must_change_password,
                s.created_at AS session_created_at
         FROM admin_sessions s
         JOIN admins a ON a.id = s.admin_id
@@ -284,6 +321,7 @@ def _admin_from_token(conn, token: str):
         "username": row["username"],
         "name": row["username"],
         "role": row["role"],
+        "must_change_password": bool(row["must_change_password"]),
         "dealer_id": "",
         "dealer_code": "",
         "dealer_name": "",
@@ -300,6 +338,7 @@ def _dealer_user_from_rep(rep: dict | None) -> dict | None:
         "username": rep["employee_code"],
         "name": rep.get("name") or rep["employee_code"],
         "role": "dealer",
+        "must_change_password": bool(rep.get("must_change_password")),
         "dealer_role": rep.get("dealer_role") or "staff",
         "dealer_id": rep.get("dealer_id") or "",
         "dealer_code": rep.get("dealer_code") or "",
@@ -328,7 +367,7 @@ def _skt_auth(allowed_roles: set[str]):
             {"error": "SUPER_ONLY", "message": "SKT 총괄 계정만 할 수 있습니다. (SKT 직원은 조회만 가능)"}
         ), 403
     g.admin = admin
-    return None
+    return _password_gate(admin.get("must_change_password"))
 
 
 def require_admin(fn):
@@ -382,6 +421,9 @@ def require_inventory_user(fn):
                 {"error": "INVENTORY_AUTH_REQUIRED", "message": "재고 화면 로그인이 필요합니다."}
             ), 401
         g.inventory_user = user
+        blocked = _password_gate(user.get("must_change_password"))
+        if blocked is not None:
+            return blocked
         return fn(*args, **kwargs)
 
     return wrapped
@@ -454,7 +496,8 @@ def require_rep(fn):
 
     @wraps(fn)
     def wrapped(*args, **kwargs):
-        token = (request.headers.get("X-Rep-Token") or "").strip()
+        # 재고 화면은 X-Admin-Token 헤더로 사원 토큰을 보낸다. 토큰은 rep_sessions 에서만 확인한다.
+        token = _request_token()
         with db_session() as conn:
             rep = _rep_from_token(conn, token)
         if not rep:
@@ -462,9 +505,106 @@ def require_rep(fn):
                 {"error": "REP_AUTH_REQUIRED", "message": "다시 로그인해주세요."}
             ), 401
         g.rep = rep
+        blocked = _password_gate(rep.get("must_change_password"))
+        if blocked is not None:
+            return blocked
         return fn(*args, **kwargs)
 
     return wrapped
+
+
+# ---------------------------------------------------------------------------
+# 비밀번호 본인 재설정 (고유ID = SWING ID + 전화번호)
+# ---------------------------------------------------------------------------
+
+RESET_MAX_FAILURES = 5  # 같은 고유ID 또는 같은 IP 기준
+RESET_WINDOW_SECONDS = 15 * 60
+_RESET_FAILURES: dict[str, list[float]] = {}
+_RESET_LOCK = threading.Lock()
+
+
+def _reset_attempts_left(keys: list[str]) -> int:
+    """키(고유ID, IP)별 남은 시도 횟수. 전화번호를 무작정 넣어보는 걸 막는다."""
+    cutoff = time.time() - RESET_WINDOW_SECONDS
+    with _RESET_LOCK:
+        worst = 0
+        for key in keys:
+            fails = [t for t in _RESET_FAILURES.get(key, []) if t > cutoff]
+            if fails:
+                _RESET_FAILURES[key] = fails
+            else:
+                _RESET_FAILURES.pop(key, None)
+            worst = max(worst, len(fails))
+        return max(0, RESET_MAX_FAILURES - worst)
+
+
+def _record_reset_failure(keys: list[str]) -> None:
+    now = time.time()
+    with _RESET_LOCK:
+        for key in keys:
+            _RESET_FAILURES.setdefault(key, []).append(now)
+
+
+def _clear_reset_failures(keys: list[str]) -> None:
+    with _RESET_LOCK:
+        for key in keys:
+            _RESET_FAILURES.pop(key, None)
+
+
+@app.route("/api/auth/reset-password", methods=["POST"])
+def reset_password():
+    """고유ID(SWING ID)와 등록된 전화번호가 맞으면 본인이 바로 새 비밀번호를 정한다."""
+    body = request.get_json(force=True, silent=True) or {}
+    employee_code = (body.get("employee_code") or "").strip()
+    phone = normalize_phone(body.get("phone"))
+    new_password = body.get("new_password") or ""
+
+    if not employee_code or not phone or not new_password:
+        return jsonify(
+            {"error": "BAD_INPUT", "message": "고유ID, 전화번호, 새 비밀번호를 모두 입력해주세요."}
+        ), 400
+    if len(new_password) < 4:
+        return jsonify({"error": "PASSWORD_TOO_SHORT", "message": "새 비밀번호는 4자 이상이어야 합니다."}), 400
+    if new_password == employee_code:
+        return jsonify(
+            {"error": "PASSWORD_TOO_SIMPLE", "message": "고유ID와 다른 비밀번호를 정해주세요."}
+        ), 400
+    if normalize_phone(new_password) == phone:
+        return jsonify(
+            {"error": "PASSWORD_TOO_SIMPLE", "message": "전화번호와 다른 비밀번호를 정해주세요."}
+        ), 400
+
+    keys = [f"code:{employee_code}", f"ip:{request.remote_addr or 'unknown'}"]
+    if _reset_attempts_left(keys) <= 0:
+        return jsonify(
+            {
+                "error": "TOO_MANY_ATTEMPTS",
+                "message": "시도가 너무 많습니다. 15분 후에 다시 해주세요. 급하면 관리자에게 문의하세요.",
+            }
+        ), 429
+
+    # 고유ID가 있는지 없는지 알려주지 않는다. 실패 문구는 항상 같다.
+    mismatch = jsonify(
+        {"error": "RESET_MISMATCH", "message": "고유ID와 전화번호가 등록된 정보와 다릅니다."}
+    ), 401
+
+    with db_session() as conn:
+        rep = conn.execute("SELECT * FROM reps WHERE employee_code = ?", (employee_code,)).fetchone()
+        stored_phone = normalize_phone(rep["phone"]) if rep else ""
+        if not rep or not stored_phone or not secrets.compare_digest(stored_phone, phone):
+            _record_reset_failure(keys)
+            return mismatch
+
+        conn.execute(
+            "UPDATE reps SET password_hash = ?, password_reset_at = ? WHERE id = ?",
+            (hash_password(new_password), now_iso(), rep["id"]),
+        )
+        # 비밀번호가 바뀌었으니 이전 로그인은 모두 끊는다.
+        conn.execute("DELETE FROM rep_sessions WHERE rep_id = ?", (rep["id"],))
+
+    _clear_reset_failures(keys)
+    app.logger.info("password reset by phone: employee_code=%s", employee_code)
+    return jsonify({"ok": True, "message": "비밀번호를 바꿨습니다. 새 비밀번호로 로그인해주세요."})
 
 
 def _current_rep_id() -> str:
@@ -580,6 +720,7 @@ def _user_payload(user: dict, token: str | None = None) -> dict:
         # SKT 직원은 조회 전용이라 업로드 버튼을 숨긴다.
         "can_upload": is_dealer or user.get("role") == "super",
         "can_edit": user.get("role") == "super",
+        "must_change_password": bool(user.get("must_change_password")),
     }
     if token:
         data["token"] = token
@@ -719,7 +860,15 @@ def login():
             return jsonify({"error": "INVALID_PASSWORD", "message": "비밀번호가 올바르지 않습니다."}), 401
 
         result = public_rep(rep)
-        result["using_initial_password"] = check_password_hash(stored, employee_code)
+        using_initial = check_password_hash(stored, employee_code)
+        if bool(rep["must_change_password"]) != using_initial:
+            # 플래그와 실제 비밀번호가 어긋나면(수동 변경 등) 실제 값에 맞춘다.
+            conn.execute(
+                "UPDATE reps SET must_change_password = ? WHERE id = ?",
+                (1 if using_initial else 0, rep["id"]),
+            )
+        result["using_initial_password"] = using_initial
+        result["must_change_password"] = using_initial
         result["token"] = _create_rep_session(conn, rep["id"])
         return jsonify(result)
 
@@ -764,8 +913,13 @@ def change_password():
         if not stored or not check_password_hash(stored, current_password):
             return jsonify({"error": "INVALID_PASSWORD", "message": "현재 비밀번호가 올바르지 않습니다."}), 401
 
+        if new_password == rep["employee_code"]:
+            return jsonify(
+                {"error": "PASSWORD_TOO_SIMPLE", "message": "고유ID와 다른 비밀번호를 정해주세요."}
+            ), 400
+
         conn.execute(
-            "UPDATE reps SET password_hash = ? WHERE id = ?",
+            "UPDATE reps SET password_hash = ?, must_change_password = 0 WHERE id = ?",
             (hash_password(new_password), rep_id),
         )
         # 비밀번호를 바꾸면 이 기기만 남기고 다른 로그인은 끊는다.
@@ -796,7 +950,13 @@ def admin_login():
             return jsonify({"error": "INVALID_ADMIN", "message": "관리자 아이디 또는 비밀번호가 올바르지 않습니다."}), 401
         token = _create_session(conn, admin["id"])
         return jsonify(
-            {"token": token, "username": admin["username"], "role": role, "can_edit": role == "super"}
+            {
+                "token": token,
+                "username": admin["username"],
+                "role": role,
+                "can_edit": role == "super",
+                "must_change_password": bool(admin["must_change_password"]),
+            }
         )
 
 
@@ -813,7 +973,14 @@ def admin_logout():
 @require_skt
 def admin_me():
     role = g.admin["role"]
-    return jsonify({"username": g.admin["username"], "role": role, "can_edit": role == "super"})
+    return jsonify(
+        {
+            "username": g.admin["username"],
+            "role": role,
+            "can_edit": role == "super",
+            "must_change_password": bool(g.admin.get("must_change_password")),
+        }
+    )
 
 
 @app.route("/api/inventory/login", methods=["POST"])
@@ -913,7 +1080,7 @@ def admin_change_password():
         if not admin or not check_password_hash(admin["password_hash"], current_password):
             return jsonify({"error": "INVALID_PASSWORD", "message": "현재 비밀번호가 올바르지 않습니다."}), 401
         conn.execute(
-            "UPDATE admins SET password_hash = ? WHERE id = ?",
+            "UPDATE admins SET password_hash = ?, must_change_password = 0 WHERE id = ?",
             (hash_password(new_password), admin["id"]),
         )
         return jsonify({"ok": True, "message": "비밀번호가 변경되었습니다."})
@@ -1175,8 +1342,12 @@ def create_skt_staff_account():
                 {"error": "USERNAME_EXISTS", "message": "영업사원 고유ID와 같은 아이디는 쓸 수 없습니다."}
             ), 409
         account_id = new_id()
+        # 발급받은 초기 비밀번호는 첫 로그인 때 본인이 바꾼다.
         conn.execute(
-            "INSERT INTO admins (id, username, password_hash, created_at, role) VALUES (?, ?, ?, ?, 'staff')",
+            """
+            INSERT INTO admins (id, username, password_hash, created_at, role, must_change_password)
+            VALUES (?, ?, ?, ?, 'staff', 1)
+            """,
             (account_id, username, hash_password(password), now_iso()),
         )
         row = conn.execute("SELECT * FROM admins WHERE id = ?", (account_id,)).fetchone()
@@ -1871,6 +2042,30 @@ def get_points(rep_id):
         ).fetchall()
         ledgers = [row_to_dict(r) for r in rows]
         wallet = _rep_point_balance(conn, rep_id)
+
+        # 소속 대리점 안에서 내 누적 적립 순위. 대리점이 없으면 순위도 없다.
+        dealer_rank = None
+        dealer_rep_count = None
+        rep_row = conn.execute("SELECT dealer_id FROM reps WHERE id = ?", (rep_id,)).fetchone()
+        dealer_id = rep_row["dealer_id"] if rep_row else None
+        if dealer_id:
+            peers = conn.execute(
+                """
+                SELECT r.id as rep_id, COALESCE(SUM(pl.points), 0) as total_points
+                FROM reps r
+                LEFT JOIN point_ledger pl ON pl.rep_id = r.id
+                WHERE r.dealer_id = ?
+                GROUP BY r.id
+                ORDER BY total_points DESC
+                """,
+                (dealer_id,),
+            ).fetchall()
+            dealer_rep_count = len(peers)
+            for i, row in enumerate(peers):
+                if row["rep_id"] == rep_id:
+                    dealer_rank = i + 1
+                    break
+
         # total 은 기존 화면 호환을 위해 누적 적립 그대로 두고, 사용/잔액을 함께 내려준다.
         return jsonify(
             {
@@ -1878,6 +2073,8 @@ def get_points(rep_id):
                 "used": wallet["spent"],
                 "balance": wallet["balance"],
                 "ledgers": ledgers,
+                "dealer_rank": dealer_rank,
+                "dealer_rep_count": dealer_rep_count,
             }
         )
 
