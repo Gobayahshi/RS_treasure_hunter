@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import re
 from datetime import date, datetime
 from io import BytesIO, StringIO
@@ -671,6 +672,39 @@ def _in_bbox(lat, lng, bbox: tuple[float, float, float, float]) -> bool:
     return south <= y <= north and west <= x <= east
 
 
+def normalize_circle(circle) -> tuple[float, float, float] | None:
+    """지도에서 원형으로 그린 영역: 중심 lat/lng + 반경(km)."""
+    if not circle:
+        return None
+    try:
+        lat = float(circle.get("lat"))
+        lng = float(circle.get("lng"))
+        radius_km = float(circle.get("radius_km"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if radius_km <= 0:
+        return None
+    return lat, lng, radius_km
+
+
+def _in_circle(lat, lng, circle: tuple[float, float, float]) -> bool:
+    center_lat, center_lng, radius_km = circle
+    try:
+        y = float(lat)
+        x = float(lng)
+    except (TypeError, ValueError):
+        return False
+    return haversine_distance_meters(center_lat, center_lng, y, x) <= radius_km * 1000
+
+
+def _circle_to_bbox(circle: tuple[float, float, float]) -> tuple[float, float, float, float]:
+    """SQL에서 쓸 사각형 사전 필터. 원 바깥 모서리가 살짝 섞일 수 있어 정확한 반경 판정은 Python에서 한 번 더 한다."""
+    lat, lng, radius_km = circle
+    lat_delta = radius_km / 111.0
+    lng_delta = radius_km / max(1.0, 111.0 * math.cos(math.radians(lat)))
+    return lat - lat_delta, lng - lng_delta, lat + lat_delta, lng + lng_delta
+
+
 def inventory_map_points(
     conn,
     model_prefix: str,
@@ -681,6 +715,7 @@ def inventory_map_points(
     keyword: str | None = None,
     dealer_id: str | None = None,
     bbox=None,
+    circle=None,
     aged_only: bool = False,
     radius_km: float | None = None,
     product_short: str | None = None,
@@ -702,6 +737,7 @@ def inventory_map_points(
     wanted_keyword = (keyword or "").strip()
     wanted_dealer = (dealer_id or "").strip()
     wanted_bbox = normalize_bbox(bbox)
+    wanted_circle = normalize_circle(circle)
     try:
         radius_m = float(radius_km) * 1000 if radius_km not in (None, "") else None
     except (TypeError, ValueError):
@@ -810,6 +846,9 @@ def inventory_map_points(
     if wanted_bbox:
         points = [p for p in points if _in_bbox(p.get("lat"), p.get("lng"), wanted_bbox)]
         unmapped = []
+    elif wanted_circle:
+        points = [p for p in points if _in_circle(p.get("lat"), p.get("lng"), wanted_circle)]
+        unmapped = []
     if aged_only:
         points = [p for p in points if (p.get("aged_qty") or 0) > 0]
         unmapped = [u for u in unmapped if (u.get("aged_qty") or 0) > 0]
@@ -899,6 +938,11 @@ def inventory_map_points(
                 "east": wanted_bbox[3],
             }
             if wanted_bbox
+            else None
+        ),
+        "circle": (
+            {"lat": wanted_circle[0], "lng": wanted_circle[1], "radius_km": wanted_circle[2]}
+            if wanted_circle
             else None
         ),
         "aged_only": bool(aged_only),
@@ -1014,7 +1058,7 @@ def _region_where(region: str) -> tuple[str, list]:
     return "(" + " OR ".join(clauses) + ")", params
 
 
-def _scope_filters(region: str | None, keyword: str | None, bbox) -> tuple[str, list]:
+def _scope_filters(region: str | None, keyword: str | None, bbox, circle=None) -> tuple[str, list]:
     sql = ""
     params: list = []
     region_sql, region_params = _region_where(region or "")
@@ -1022,6 +1066,11 @@ def _scope_filters(region: str | None, keyword: str | None, bbox) -> tuple[str, 
         sql += f" AND {region_sql}"
         params.extend(region_params)
     wanted_bbox = normalize_bbox(bbox)
+    wanted_circle = normalize_circle(circle)
+    if not wanted_bbox and wanted_circle:
+        # 원 안쪽인지는 SQL에 삼각함수가 없어 정확히 못 거른다. 감싸는 사각형으로만 추려서
+        # inventory_model_breakdown 은 "이 근방" 수준으로 보여준다 (지도 마커는 별도로 정확히 거른다).
+        wanted_bbox = _circle_to_bbox(wanted_circle)
     if wanted_bbox:
         south, west, north, east = wanted_bbox
         sql += " AND s.lat IS NOT NULL AND s.lng IS NOT NULL AND s.lat BETWEEN ? AND ? AND s.lng BETWEEN ? AND ?"
@@ -1093,13 +1142,14 @@ def inventory_model_breakdown(
     region: str | None = None,
     keyword: str | None = None,
     bbox=None,
+    circle=None,
     limit: int = 20,
 ) -> list[dict]:
     """필터에 맞는 모든 기종 대수. 지도에 안 올린 기종도 포함한다."""
     upload_ids, _uploads = _partner_upload_filter(conn, dealer_id)
     if not upload_ids:
         return []
-    extra, extra_params = _scope_filters(region, keyword, bbox)
+    extra, extra_params = _scope_filters(region, keyword, bbox, circle)
     rows = conn.execute(
         f"""
         SELECT
