@@ -66,6 +66,15 @@ webapp/
 - **요청 본문의 `rep_id` 같은 신원 값은 믿지 않는다.** 항상 토큰의 주인을 쓴다.
 - 소속 대리점이 없는 사원은 재고 화면을 쓸 수 없다 (볼 범위가 없으므로).
 
+#### 계정·로그인은 한 대화창에서 총괄한다 (2026-09-22 결정)
+4개 프로젝트가 **로그인 ID 하나**를 공유하므로, 계정·역할·권한 변경은 전담 대화창(이하 "계정 트랙") 한 곳에서만 한다.
+
+- **다른 대화창이 하지 않을 것:** 새 역할 추가, 새 로그인 화면·경로 추가, 새 세션 테이블 추가, 데코레이터 규칙 변경, 로그인 ID 체계 변경. 필요하면 계정 트랙에 요청하고, 자기 프로젝트 섹션의 "다음 할 일"에 적어 둔다.
+- **다른 대화창이 해도 되는 것:** 이미 있는 데코레이터(`require_admin` 등)를 새 API에 **붙이는 것**. 어떤 역할이 그 기능을 쓸지 애매하면 사용자에게 묻는다.
+- **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/*/login|logout|me|change-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions` 스키마, `/admin`의 계정·영업사원 화면, 재고 로그인 화면.
+- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
+- **아직 정하지 않은 것 (계정 트랙에서 결정):** 판매점(P코드) 계정 발급 방식과 초기 비밀번호(프로젝트 3), 정책 챗봇 이용 범위(프로젝트 4), 재고 화면에서 초기 비밀번호 변경 강제 여부.
+
 ### 반드시 지킬 구현 규칙
 - **시간:** DB에는 UTC로 저장하고, 날짜 경계·근무시간 같은 판단은 한국 시간으로 한다 (`confidence.to_kst`, `app.kst_now`, `app.kst_day_start_utc_iso`).
 - **판매점코드:** 저장할 때 `normalize_store_code()`로 공백 없는 대문자로 맞춘다. 조인은 `s.store_code = i.store_code`처럼 단순 비교로 쓴다. `UPPER()/TRIM()`을 씌우면 인덱스를 못 타 수백 초가 걸린다 (2026-09-16 실측 413초 → 0.39초).
