@@ -789,7 +789,12 @@ async function handleResetPassword() {
   msg.classList.remove("error");
 
   if (!employeeCode || !phone || !newPassword) {
-    msg.textContent = "고유ID, 전화번호, 새 비밀번호를 입력해주세요.";
+    msg.textContent = "고유ID, 전화번호 뒤 4자리, 새 비밀번호를 입력해주세요.";
+    msg.classList.add("error");
+    return;
+  }
+  if (!/^\d{4}$/.test(phone.replace(/\D/g, "").slice(-4))) {
+    msg.textContent = "전화번호 뒤 4자리를 숫자로 입력해주세요.";
     msg.classList.add("error");
     return;
   }

@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS reps (
     device_id TEXT,
     created_at TEXT NOT NULL,
     dealer_role TEXT NOT NULL DEFAULT 'staff',
-    phone TEXT,
+    phone_last4 TEXT,
     password_reset_at TEXT,
     must_change_password INTEGER NOT NULL DEFAULT 0
 );
@@ -258,11 +258,31 @@ def migrate_schema(conn) -> None:
     if rep_cols and "dealer_role" not in rep_cols:
         conn.execute("ALTER TABLE reps ADD COLUMN dealer_role TEXT NOT NULL DEFAULT 'staff'")
 
-    # 비밀번호 본인 재설정용. 전화번호는 숫자만 저장한다 (app.normalize_phone).
-    if rep_cols and "phone" not in rep_cols:
-        conn.execute("ALTER TABLE reps ADD COLUMN phone TEXT")
+    # 비밀번호 본인 재설정용. 개인정보를 줄이려고 전화번호는 뒤 4자리만 저장한다.
+    if rep_cols and "phone_last4" not in rep_cols:
+        conn.execute("ALTER TABLE reps ADD COLUMN phone_last4 TEXT")
+        if "phone" in rep_cols:
+            # 예전에 저장한 전체 번호는 뒤 4자리만 남기고 지운다.
+            conn.execute(
+                """
+                UPDATE reps SET phone_last4 = SUBSTR(REPLACE(REPLACE(REPLACE(phone, '-', ''), ' ', ''), '+', ''), -4)
+                WHERE phone IS NOT NULL AND phone != ''
+                """
+            )
+            conn.execute("UPDATE reps SET phone = NULL")
     if rep_cols and "password_reset_at" not in rep_cols:
         conn.execute("ALTER TABLE reps ADD COLUMN password_reset_at TEXT")
+
+    # 고유ID는 대문자로 통일한다 (로그인은 대소문자를 가리지 않는다).
+    # 대문자로 바꾸면 겹치는 ID가 생기는 경우에는 건드리지 않는다.
+    if rep_cols:
+        clash = conn.execute(
+            """
+            SELECT 1 FROM reps GROUP BY UPPER(employee_code) HAVING COUNT(*) > 1 LIMIT 1
+            """
+        ).fetchone()
+        if not clash:
+            conn.execute("UPDATE reps SET employee_code = UPPER(employee_code) WHERE employee_code != UPPER(employee_code)")
 
     # 초기 비밀번호(=고유ID)를 쓰는 사람은 바꿀 때까지 앱을 못 쓰게 막는다.
     # 매 요청마다 해시를 비교하면 느리므로 플래그로 들고 있는다.

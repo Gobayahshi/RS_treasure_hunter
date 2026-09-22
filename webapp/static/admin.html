@@ -142,8 +142,16 @@
         <p class="muted small">
           판매점코드가 있으면 주소가 같아도 매장을 따로 등록합니다. 기본주소로 GPS를 잡고, 상세주소는 표시용입니다.
         </p>
+        <p class="muted small">
+          영업사원 시트는 사내 <strong>Sales_info</strong> 형식(파트너코드 · 직원명 · LOGIN-ID · 전화번호뒤4자리)도
+          그대로 받습니다. 전화번호는 뒤 4자리만 저장합니다.
+        </p>
         <button id="templateBtn" class="btn-secondary">양식 다운로드</button>
         <input id="excelFiles" type="file" accept=".xlsx" multiple />
+        <label class="check-line">
+          <input id="removeMissingReps" type="checkbox" />
+          이 파일에 없는 영업사원 삭제 (방문·포인트 기록까지 사라집니다)
+        </label>
         <button id="importBtn" class="btn-primary">엑셀 올리기</button>
         <p id="importMessage" class="muted small"></p>
         <pre id="importResult" class="import-result hidden"></pre>
@@ -177,6 +185,15 @@
 
     <section class="screen" data-tab="account">
       <h2>영업사원</h2>
+      <div class="card" data-super-only>
+        <p class="muted small">
+          시연·교육용 테스트 계정입니다. 대리점마다 <code>대리점코드TEST_1</code>, <code>대리점코드TEST_2</code> 2개를 만듭니다.
+          비밀번호는 아이디와 같고, 전화번호 뒤 4자리는 0000 입니다.
+        </p>
+        <button id="createTestAccountsBtn" class="btn-secondary">테스트 계정 만들기</button>
+        <button id="deleteTestAccountsBtn" class="btn-secondary">테스트 계정 모두 삭제</button>
+        <p id="testAccountMessage" class="muted small"></p>
+      </div>
       <p class="muted small">
         영업사원은 곧 대리점 직원입니다. 같은 고유ID로 재고 화면에도 로그인합니다.
         관리자/직원 구분은 권한 차이 없이 표시용입니다.

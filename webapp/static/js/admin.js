@@ -843,6 +843,31 @@ function renderReps() {
   }
 }
 
+async function handleCreateTestAccounts() {
+  const msg = $("testAccountMessage");
+  msg.textContent = "만드는 중...";
+  try {
+    const data = await api("/admin/test-accounts", { method: "POST" });
+    msg.textContent = `대리점 ${data.dealer_count}곳 · 새로 만든 계정 ${data.created}개 (이미 있던 계정 ${data.already}개). ${data.note}`;
+    await loadReps();
+  } catch (err) {
+    msg.textContent = String(err.message || err);
+  }
+}
+
+async function handleDeleteTestAccounts() {
+  const msg = $("testAccountMessage");
+  if (!confirm("테스트 계정을 모두 지웁니다. 그 계정의 방문·포인트 기록도 함께 사라집니다. 계속할까요?")) return;
+  msg.textContent = "지우는 중...";
+  try {
+    const data = await api("/admin/test-accounts", { method: "DELETE" });
+    msg.textContent = `테스트 계정 ${data.removed}개를 삭제했습니다.`;
+    await loadReps();
+  } catch (err) {
+    msg.textContent = String(err.message || err);
+  }
+}
+
 async function loadAccounts() {
   const container = $("accountList");
   if (!container || !adminCanEdit) return;
@@ -1084,7 +1109,10 @@ function formatImportSummary(summary) {
   for (const key of ["dealers", "reps", "stores"]) {
     const label = { dealers: "대리점", reps: "영업사원", stores: "판매점" }[key];
     const s = summary[key];
-    lines.push(`${label}: 신규 ${s.created} / 수정 ${s.updated} / 건너뜀 ${s.skipped}${s.duplicate_codes ? ` / 중복코드 ${s.duplicate_codes}` : ""}`);
+    lines.push(
+      `${label}: 신규 ${s.created} / 수정 ${s.updated} / 건너뜀 ${s.skipped}` +
+        `${s.removed ? ` / 삭제 ${s.removed}` : ""}${s.duplicate_codes ? ` / 중복코드 ${s.duplicate_codes}` : ""}`
+    );
     (s.errors || []).slice(0, 20).forEach((e) => lines.push(`  - ${e}`));
     if ((s.errors || []).length > 20) lines.push(`  - ...외 ${s.errors.length - 20}건`);
   }
@@ -1115,6 +1143,15 @@ async function handleImport() {
   const form = new FormData();
   for (const file of input.files) {
     form.append("files", file);
+  }
+
+  const removeMissing = $("removeMissingReps");
+  if (removeMissing && removeMissing.checked) {
+    // 되돌릴 수 없는 삭제라 한 번 더 확인한다.
+    if (!confirm("이 파일에 없는 영업사원을 삭제합니다. 그 사람들의 방문·포인트 기록도 함께 사라지고 되돌릴 수 없습니다. 계속할까요?")) {
+      return;
+    }
+    form.append("remove_missing_reps", "1");
   }
 
   msg.textContent = "올리는 중... 주소로 좌표를 변환하므로 매장이 많으면 시간이 걸릴 수 있습니다.";
@@ -1180,6 +1217,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("refreshAccountsBtn")) $("refreshAccountsBtn").addEventListener("click", loadAccounts);
   if ($("createAccountBtn")) $("createAccountBtn").addEventListener("click", handleCreateAccount);
   if ($("repSearch")) $("repSearch").addEventListener("input", renderReps);
+  if ($("createTestAccountsBtn")) $("createTestAccountsBtn").addEventListener("click", handleCreateTestAccounts);
+  if ($("deleteTestAccountsBtn")) $("deleteTestAccountsBtn").addEventListener("click", handleDeleteTestAccounts);
   if ($("storeSearch")) $("storeSearch").addEventListener("input", handleStoreSearchInput);
   $("importBtn").addEventListener("click", handleImport);
   $("inventoryImportBtn").addEventListener("click", handleInventoryImport);

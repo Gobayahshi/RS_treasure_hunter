@@ -25,7 +25,10 @@ from db import db_session, init_db, start_store_seed_sync
 from excel_import import (
     build_stats_xlsx,
     build_template_xlsx,
-    normalize_phone,
+    delete_rep,
+    find_rep,
+    normalize_employee_code,
+    normalize_phone_last4,
     normalize_store_code,
     parse_uploads,
     upsert_masters,
@@ -132,23 +135,22 @@ def mask_person_name(name: str) -> str:
     return text[0] + ("*" * (len(text) - 2)) + text[-1]
 
 
-def mask_phone(phone: str) -> str:
-    """010-****-5678 형태로만 보여준다. 전체 번호는 화면에 내리지 않는다."""
-    digits = normalize_phone(phone)
-    if len(digits) < 7:
-        return ""
-    return f"{digits[:3]}-****-{digits[-4:]}"
+def mask_phone(phone_last4: str) -> str:
+    """****-5678 형태로만 보여준다. 애초에 뒤 4자리만 저장한다."""
+    digits = normalize_phone_last4(phone_last4)
+    return f"****-{digits}" if digits else ""
 
 
 def public_rep(row) -> dict:
-    """API 응답용. 비밀번호 해시와 전화번호 원본은 절대 내려보내지 않는다."""
+    """API 응답용. 비밀번호 해시와 전화번호는 그대로 내려보내지 않는다."""
     data = row_to_dict(row)
     if not data:
         return data
     data.pop("password_hash", None)
-    phone = data.pop("phone", None)
-    data["has_phone"] = bool(normalize_phone(phone))
-    data["phone_masked"] = mask_phone(phone)
+    data.pop("phone", None)  # 예전 컬럼이 남아 있는 DB 대비
+    phone4 = data.pop("phone_last4", None)
+    data["has_phone"] = bool(normalize_phone_last4(phone4))
+    data["phone_masked"] = mask_phone(phone4)
     return data
 
 
@@ -553,23 +555,24 @@ def _clear_reset_failures(keys: list[str]) -> None:
 
 @app.route("/api/auth/reset-password", methods=["POST"])
 def reset_password():
-    """고유ID(SWING ID)와 등록된 전화번호가 맞으면 본인이 바로 새 비밀번호를 정한다."""
+    """고유ID(SWING ID)와 등록된 전화번호 뒤 4자리가 맞으면 본인이 바로 새 비밀번호를 정한다."""
     body = request.get_json(force=True, silent=True) or {}
-    employee_code = (body.get("employee_code") or "").strip()
-    phone = normalize_phone(body.get("phone"))
+    employee_code = normalize_employee_code(body.get("employee_code"))
+    # 전체 번호를 넣어도 뒤 4자리만 본다.
+    phone4 = normalize_phone_last4(body.get("phone") or body.get("phone_last4"))
     new_password = body.get("new_password") or ""
 
-    if not employee_code or not phone or not new_password:
+    if not employee_code or not phone4 or not new_password:
         return jsonify(
-            {"error": "BAD_INPUT", "message": "고유ID, 전화번호, 새 비밀번호를 모두 입력해주세요."}
+            {"error": "BAD_INPUT", "message": "고유ID와 전화번호 뒤 4자리, 새 비밀번호를 모두 입력해주세요."}
         ), 400
     if len(new_password) < 4:
         return jsonify({"error": "PASSWORD_TOO_SHORT", "message": "새 비밀번호는 4자 이상이어야 합니다."}), 400
-    if new_password == employee_code:
+    if normalize_employee_code(new_password) == employee_code:
         return jsonify(
             {"error": "PASSWORD_TOO_SIMPLE", "message": "고유ID와 다른 비밀번호를 정해주세요."}
         ), 400
-    if normalize_phone(new_password) == phone:
+    if new_password.strip() == phone4:
         return jsonify(
             {"error": "PASSWORD_TOO_SIMPLE", "message": "전화번호와 다른 비밀번호를 정해주세요."}
         ), 400
@@ -585,13 +588,13 @@ def reset_password():
 
     # 고유ID가 있는지 없는지 알려주지 않는다. 실패 문구는 항상 같다.
     mismatch = jsonify(
-        {"error": "RESET_MISMATCH", "message": "고유ID와 전화번호가 등록된 정보와 다릅니다."}
+        {"error": "RESET_MISMATCH", "message": "고유ID와 전화번호 뒤 4자리가 등록된 정보와 다릅니다."}
     ), 401
 
     with db_session() as conn:
-        rep = conn.execute("SELECT * FROM reps WHERE employee_code = ?", (employee_code,)).fetchone()
-        stored_phone = normalize_phone(rep["phone"]) if rep else ""
-        if not rep or not stored_phone or not secrets.compare_digest(stored_phone, phone):
+        rep = find_rep(conn, employee_code)
+        stored4 = normalize_phone_last4(rep["phone_last4"]) if rep else ""
+        if not rep or not stored4 or not secrets.compare_digest(stored4, phone4):
             _record_reset_failure(keys)
             return mismatch
 
@@ -830,7 +833,8 @@ def _rep_with_dealer(conn, rep_id: str):
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     body = request.get_json(force=True)
-    employee_code = (body.get("employee_code") or "").strip()
+    # 고유ID는 대소문자를 가리지 않는다.
+    employee_code = normalize_employee_code(body.get("employee_code"))
     password = body.get("password") or ""
     if not employee_code:
         return jsonify({"error": "employee_code required"}), 400
@@ -843,7 +847,7 @@ def login():
             SELECT r.*, d.dealer_code, d.name as dealer_name
             FROM reps r
             LEFT JOIN dealers d ON d.id = r.dealer_id
-            WHERE r.employee_code = ?
+            WHERE UPPER(r.employee_code) = ?
             """,
             (employee_code,),
         ).fetchone()
@@ -860,7 +864,11 @@ def login():
             return jsonify({"error": "INVALID_PASSWORD", "message": "비밀번호가 올바르지 않습니다."}), 401
 
         result = public_rep(rep)
-        using_initial = check_password_hash(stored, employee_code)
+        # 초기 비밀번호는 저장된 고유ID 그대로다 (입력한 대소문자가 아니라).
+        # 시연용 테스트 계정은 아이디=비밀번호로 그냥 쓰라고 만든 것이라 강제하지 않는다.
+        using_initial = check_password_hash(stored, rep["employee_code"]) and not is_test_account(
+            rep["employee_code"]
+        )
         if bool(rep["must_change_password"]) != using_initial:
             # 플래그와 실제 비밀번호가 어긋나면(수동 변경 등) 실제 값에 맞춘다.
             conn.execute(
@@ -1008,9 +1016,9 @@ def inventory_login():
             """
             SELECT r.*, d.dealer_code, d.name AS dealer_name
             FROM reps r LEFT JOIN dealers d ON d.id = r.dealer_id
-            WHERE r.employee_code = ?
+            WHERE UPPER(r.employee_code) = ?
             """,
-            (username,),
+            (normalize_employee_code(username),),
         ).fetchone()
         if not rep or not rep["password_hash"] or not check_password_hash(rep["password_hash"], password):
             return invalid
@@ -1337,7 +1345,7 @@ def create_skt_staff_account():
         if conn.execute("SELECT 1 FROM admins WHERE username = ?", (username,)).fetchone():
             return jsonify({"error": "USERNAME_EXISTS", "message": "이미 있는 아이디입니다."}), 409
         # 재고 화면은 같은 로그인 칸에 사원 고유ID도 받으므로 겹치면 안 된다.
-        if conn.execute("SELECT 1 FROM reps WHERE employee_code = ?", (username,)).fetchone():
+        if find_rep(conn, username):
             return jsonify(
                 {"error": "USERNAME_EXISTS", "message": "영업사원 고유ID와 같은 아이디는 쓸 수 없습니다."}
             ), 409
@@ -1368,12 +1376,100 @@ def delete_skt_staff_account(account_id):
         return jsonify({"ok": True})
 
 
+# ---------------------------------------------------------------------------
+# 테스트용 대리점 계정 - 대리점코드 + test_1 / test_2 (시연·교육용, 언제든 지울 수 있다)
+# ---------------------------------------------------------------------------
+
+TEST_ACCOUNT_SUFFIXES = ("TEST_1", "TEST_2")
+TEST_ACCOUNT_PHONE4 = "0000"
+
+
+def _test_account_codes(dealer_code: str) -> list[str]:
+    code = normalize_employee_code(dealer_code)
+    return [f"{code}{suffix}" for suffix in TEST_ACCOUNT_SUFFIXES]
+
+
+def is_test_account(employee_code: str) -> bool:
+    return normalize_employee_code(employee_code).endswith(TEST_ACCOUNT_SUFFIXES)
+
+
+@app.route("/api/admin/test-accounts", methods=["POST"])
+@require_admin
+def create_test_accounts():
+    """직원이 등록된 대리점마다 테스트 계정 2개를 만든다.
+
+    비밀번호는 고유ID와 같고, 시연용이라 비밀번호 변경을 요구하지 않는다.
+    전화번호 뒤 4자리는 0000 이라 재설정 화면도 그대로 시험할 수 있다.
+    """
+    created, existing = [], []
+    with db_session() as conn:
+        dealers = conn.execute(
+            """
+            SELECT DISTINCT d.id, d.dealer_code, d.name
+            FROM dealers d JOIN reps r ON r.dealer_id = d.id
+            WHERE d.dealer_code IS NOT NULL AND d.dealer_code != ''
+            ORDER BY d.name
+            """
+        ).fetchall()
+        for dealer in dealers:
+            for index, code in enumerate(_test_account_codes(dealer["dealer_code"]), start=1):
+                if find_rep(conn, code):
+                    existing.append(code)
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO reps (
+                        id, dealer_id, name, employee_code, password_hash, device_id, created_at,
+                        phone_last4, dealer_role, must_change_password
+                    ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 0)
+                    """,
+                    (
+                        new_id(),
+                        dealer["id"],
+                        f"[테스트] {dealer['name']} {index}",
+                        code,
+                        hash_password(code),
+                        now_iso(),
+                        TEST_ACCOUNT_PHONE4,
+                        "manager" if index == 1 else "staff",
+                    ),
+                )
+                created.append(code)
+    return jsonify(
+        {
+            "created": len(created),
+            "already": len(existing),
+            "dealer_count": len(dealers),
+            "codes": created,
+            "note": "비밀번호는 아이디와 같습니다. 전화번호 뒤 4자리는 0000 입니다.",
+        }
+    ), 201
+
+
+@app.route("/api/admin/test-accounts", methods=["DELETE"])
+@require_admin
+def delete_test_accounts():
+    """테스트 계정과 그 계정의 방문·포인트 기록을 모두 지운다."""
+    removed = 0
+    with db_session() as conn:
+        rows = conn.execute(
+            "SELECT id, employee_code FROM reps WHERE UPPER(employee_code) LIKE '%TEST\\_%' ESCAPE '\\'"
+        ).fetchall()
+        for row in rows:
+            code = normalize_employee_code(row["employee_code"])
+            if not code.endswith(TEST_ACCOUNT_SUFFIXES):
+                continue
+            delete_rep(conn, row["id"])
+            removed += 1
+    return jsonify({"removed": removed})
+
+
 @app.route("/api/reps", methods=["POST"])
 @require_admin
 def create_rep():
     body = request.get_json(force=True)
     name = (body.get("name") or "").strip()
-    employee_code = (body.get("employee_code") or "").strip()
+    employee_code = normalize_employee_code(body.get("employee_code"))
     dealer_code = (body.get("dealer_code") or "").strip()
     if not name or not employee_code:
         return jsonify({"error": "name, employee_code required"}), 400
@@ -1386,18 +1482,16 @@ def create_rep():
                 return jsonify({"error": "DEALER_NOT_FOUND"}), 404
             dealer_id = dealer["id"]
 
-        existing = conn.execute(
-            "SELECT * FROM reps WHERE employee_code = ?", (employee_code,)
-        ).fetchone()
+        existing = find_rep(conn, employee_code)
         if existing:
             conn.execute(
-                "UPDATE reps SET name = ?, dealer_id = COALESCE(?, dealer_id) WHERE id = ?",
-                (name, dealer_id, existing["id"]),
+                "UPDATE reps SET name = ?, dealer_id = COALESCE(?, dealer_id), employee_code = ? WHERE id = ?",
+                (name, dealer_id, employee_code, existing["id"]),
             )
             # 비밀번호가 비어 있으면 초기값(고유ID)으로 채운다. 이미 바꾼 비번은 유지.
             if not existing["password_hash"]:
                 conn.execute(
-                    "UPDATE reps SET password_hash = ? WHERE id = ?",
+                    "UPDATE reps SET password_hash = ?, must_change_password = 1 WHERE id = ?",
                     (hash_password(default_password_for(employee_code)), existing["id"]),
                 )
             rep = _rep_with_dealer(conn, existing["id"])
@@ -2257,8 +2351,13 @@ def import_excel():
     except Exception as exc:
         return jsonify({"error": f"엑셀을 읽지 못했습니다: {exc}"}), 400
 
+    # 파일에 없는 영업사원을 지울지 여부. 되돌릴 수 없어서 관리자가 체크해야만 동작한다.
+    remove_missing = (request.form.get("remove_missing_reps") or "").strip() in {"1", "true", "yes", "on"}
+
     with db_session() as conn:
-        summary = upsert_masters(conn, buckets, now_iso(), new_id)
+        summary = upsert_masters(
+            conn, buckets, now_iso(), new_id, remove_missing_reps=remove_missing
+        )
         missing = conn.execute(
             "SELECT COUNT(*) AS cnt FROM stores WHERE lat = 0 AND lng = 0"
         ).fetchone()["cnt"]

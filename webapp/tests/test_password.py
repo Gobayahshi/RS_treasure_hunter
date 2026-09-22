@@ -18,7 +18,7 @@ def make_rep(server, phone="010-1234-5678", password=None, dealer_id=None):
     """초기 비밀번호(=고유ID)를 쓰는 사원을 만든다."""
     from db import db_session
 
-    code = uuid.uuid4().hex[:7]
+    code = uuid.uuid4().hex[:7].upper()  # 고유ID 는 대문자로 저장한다
     rep_id = uuid.uuid4().hex
     with db_session() as conn:
         if dealer_id is None:
@@ -30,7 +30,7 @@ def make_rep(server, phone="010-1234-5678", password=None, dealer_id=None):
         conn.execute(
             """
             INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, created_at,
-                              phone, must_change_password)
+                              phone_last4, must_change_password)
             VALUES (?,?,?,?,?,?,?,1)
             """,
             (
@@ -40,7 +40,7 @@ def make_rep(server, phone="010-1234-5678", password=None, dealer_id=None):
                 code,
                 server_module.hash_password(password or code),
                 datetime.utcnow().isoformat(),
-                server_module.normalize_phone(phone),
+                server_module.normalize_phone_last4(phone),
             ),
         )
     return {"id": rep_id, "code": code, "phone": phone, "password": password or code}
@@ -131,7 +131,7 @@ def test_reset_with_phone_sets_new_password(client, server):
     rep = make_rep(server, phone="010-1234-5678")
     res = client.post(
         "/api/auth/reset-password",
-        json={"employee_code": rep["code"], "phone": "010-1234-5678", "new_password": "myown123"},
+        json={"employee_code": rep["code"], "phone": "5678", "new_password": "myown123"},
     )
     assert res.status_code == 200
 
@@ -157,11 +157,11 @@ def test_reset_rejects_wrong_phone_and_unknown_id(client, server):
     rep = make_rep(server, phone="010-1234-5678")
     wrong = client.post(
         "/api/auth/reset-password",
-        json={"employee_code": rep["code"], "phone": "010-0000-0000", "new_password": "hack1234"},
+        json={"employee_code": rep["code"], "phone": "0000", "new_password": "hack1234"},
     )
     unknown = client.post(
         "/api/auth/reset-password",
-        json={"employee_code": "nosuchid", "phone": "010-1234-5678", "new_password": "hack1234"},
+        json={"employee_code": "nosuchid", "phone": "5678", "new_password": "hack1234"},
     )
     assert wrong.status_code == 401
     assert unknown.status_code == 401
@@ -178,10 +178,10 @@ def test_reset_without_registered_phone_is_refused(client, server):
 
     rep = make_rep(server)
     with db_session() as conn:
-        conn.execute("UPDATE reps SET phone = NULL WHERE id = ?", (rep["id"],))
+        conn.execute("UPDATE reps SET phone_last4 = NULL WHERE id = ?", (rep["id"],))
     res = client.post(
         "/api/auth/reset-password",
-        json={"employee_code": rep["code"], "phone": "010-1234-5678", "new_password": "pw123456"},
+        json={"employee_code": rep["code"], "phone": "5678", "new_password": "pw123456"},
     )
     assert res.status_code == 401
 
@@ -191,12 +191,12 @@ def test_reset_rate_limited_after_five_failures(client, server):
     for _ in range(server.RESET_MAX_FAILURES):
         client.post(
             "/api/auth/reset-password",
-            json={"employee_code": rep["code"], "phone": "010-0000-0000", "new_password": "pw123456"},
+            json={"employee_code": rep["code"], "phone": "0000", "new_password": "pw123456"},
         )
     # 올바른 번호라도 잠시 막힌다
     blocked = client.post(
         "/api/auth/reset-password",
-        json={"employee_code": rep["code"], "phone": "010-5555-6666", "new_password": "pw123456"},
+        json={"employee_code": rep["code"], "phone": "6666", "new_password": "pw123456"},
     )
     assert blocked.status_code == 429
     assert blocked.get_json()["error"] == "TOO_MANY_ATTEMPTS"
@@ -207,11 +207,11 @@ def test_reset_password_cannot_be_id_or_phone(client, server):
     rep = make_rep(server, phone="010-7777-8888")
     same_id = client.post(
         "/api/auth/reset-password",
-        json={"employee_code": rep["code"], "phone": "010-7777-8888", "new_password": rep["code"]},
+        json={"employee_code": rep["code"], "phone": "8888", "new_password": rep["code"]},
     )
     same_phone = client.post(
         "/api/auth/reset-password",
-        json={"employee_code": rep["code"], "phone": "010-7777-8888", "new_password": "01077778888"},
+        json={"employee_code": rep["code"], "phone": "8888", "new_password": "8888"},
     )
     assert same_id.status_code == 400
     assert same_phone.status_code == 400
@@ -236,6 +236,6 @@ def test_admin_rep_list_hides_full_phone(client, server, admin_token):
     rows = client.get("/api/reps", headers=admin_auth(admin_token)).get_json()
     row = next(r for r in rows if r["employee_code"] == rep["code"])
     assert row["has_phone"] is True
-    assert row["phone_masked"] == "010-****-5678"
+    assert row["phone_masked"] == "****-5678"
     assert "phone" not in row
     assert "password_hash" not in row

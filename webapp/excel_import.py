@@ -19,11 +19,16 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from werkzeug.security import generate_password_hash
 
-DEALER_CODE_ALIASES = {"대리점id", "대리점코드", "대리점아이디", "소속대리점id", "소속대리점코드", "dealercode", "dealerid", "dealer_code", "dealer_id"}
-DEALER_NAME_ALIASES = {"대리점명", "대리점이름", "소속대리점명", "소속대리점", "dealername", "dealer_name"}
-REP_CODE_ALIASES = {"고유id", "사원고유id", "사원id", "사원코드", "사번", "아이디", "id", "employeecode", "employee_code", "employeeid"}
-REP_NAME_ALIASES = {"이름", "성명", "사원명", "영업사원명", "name"}
-REP_PHONE_ALIASES = {"전화번호", "휴대폰", "휴대폰번호", "핸드폰", "핸드폰번호", "연락처", "phone", "mobile", "tel"}
+# 사내 Sales_info 파일은 대리점을 '파트너', 고유ID를 'LOGIN-ID' 로 부른다.
+DEALER_CODE_ALIASES = {"대리점id", "대리점코드", "대리점아이디", "소속대리점id", "소속대리점코드", "파트너코드", "dealercode", "dealerid", "dealer_code", "dealer_id"}
+DEALER_NAME_ALIASES = {"대리점명", "대리점이름", "소속대리점명", "소속대리점", "파트너명", "dealername", "dealer_name"}
+REP_CODE_ALIASES = {"고유id", "사원고유id", "사원id", "사원코드", "사번", "아이디", "id", "loginid", "swingid", "스윙id", "employeecode", "employee_code", "employeeid"}
+REP_NAME_ALIASES = {"이름", "성명", "사원명", "영업사원명", "직원명", "name"}
+# 전화번호는 개인정보라 뒤 4자리만 받는다. 전체 번호가 와도 뒤 4자리만 저장한다.
+REP_PHONE_ALIASES = {
+    "전화번호뒤4자리", "전화뒤4자리", "휴대폰뒤4자리", "뒤4자리", "전화번호4자리",
+    "전화번호", "휴대폰", "휴대폰번호", "핸드폰", "핸드폰번호", "연락처", "phone", "mobile", "tel", "phonelast4",
+}
 STORE_CODE_ALIASES = {"판매점코드", "매장코드", "점포코드", "storecode", "store_code"}
 STORE_NAME_ALIASES = {"판매점명", "매장명", "점포명", "storename", "store_name"}
 STORE_ADDR_ALIASES = {"기본주소", "주소", "판매점주소", "매장주소", "address"}
@@ -56,16 +61,26 @@ def normalize_header(value: Any) -> str:
     return raw
 
 
-def normalize_phone(value: Any) -> str:
-    """전화번호는 숫자만 남겨 저장·비교한다.
+def normalize_phone_last4(value: Any) -> str:
+    """전화번호는 뒤 4자리만 저장한다 (개인정보 최소 수집).
 
-    엑셀에서 010-1234-5678, 01012345678, +82 10-1234-5678 처럼 제각각 들어온다.
-    국가번호(82)로 시작하면 국내 형식(0으로 시작)으로 맞춘다.
+    '5678', '010-1234-5678', 5678(숫자) 어떤 형태로 와도 뒤 4자리만 남긴다.
+    4자리를 못 만들면 빈 값이다 (예: 0으로 시작하는 5678 은 엑셀에서 숫자 5678 이 되므로
+    4자리가 안 되면 앞을 0으로 채운다).
     """
-    digits = re.sub(r"\D", "", cell_str(value))
-    if digits.startswith("82"):
-        digits = "0" + digits[2:]
-    return digits
+    text = cell_str(value)
+    digits = re.sub(r"\D", "", text)
+    if not digits:
+        return ""
+    if len(digits) < 4:
+        # 엑셀이 '0123' 을 숫자 123 으로 저장한 경우
+        return digits.zfill(4)
+    return digits[-4:]
+
+
+def normalize_employee_code(value: Any) -> str:
+    """고유ID(SWING ID)는 대문자로 맞춘다. 로그인은 대소문자를 가리지 않는다."""
+    return cell_str(value).replace(" ", "").upper()
 
 
 def normalize_store_code(value: Any) -> str:
@@ -193,13 +208,45 @@ def _find_dealer(conn, code: str, name: str):
     return None
 
 
-def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str, new_id) -> dict:
+def find_rep(conn, code: str):
+    """고유ID는 대소문자를 가리지 않고 찾는다."""
+    return conn.execute(
+        "SELECT * FROM reps WHERE UPPER(employee_code) = ?", (normalize_employee_code(code),)
+    ).fetchone()
+
+
+def delete_rep(conn, rep_id: str) -> None:
+    """사원과 그 사람의 기록을 함께 지운다. 외래키 때문에 순서가 중요하다."""
+    conn.execute(
+        "DELETE FROM location_samples WHERE session_id IN (SELECT id FROM visit_sessions WHERE rep_id = ?)",
+        (rep_id,),
+    )
+    conn.execute("DELETE FROM point_ledger WHERE rep_id = ?", (rep_id,))
+    conn.execute("DELETE FROM rewards WHERE rep_id = ?", (rep_id,))
+    conn.execute("DELETE FROM visit_sessions WHERE rep_id = ?", (rep_id,))
+    conn.execute("DELETE FROM rep_sessions WHERE rep_id = ?", (rep_id,))
+    conn.execute("DELETE FROM reps WHERE id = ?", (rep_id,))
+
+
+def upsert_masters(
+    conn,
+    buckets: dict[str, list[dict[str, str]]],
+    now_iso: str,
+    new_id,
+    remove_missing_reps: bool = False,
+) -> dict:
+    """마스터 엑셀을 DB에 반영한다.
+
+    remove_missing_reps=True 면 파일에 없는 영업사원을 방문·포인트 기록까지 지운다.
+    되돌릴 수 없어서 관리자가 명시적으로 선택했을 때만 쓴다.
+    """
     summary = {
         "dealers": {"created": 0, "updated": 0, "skipped": 0, "errors": []},
-        "reps": {"created": 0, "updated": 0, "skipped": 0, "errors": []},
+        "reps": {"created": 0, "updated": 0, "skipped": 0, "removed": 0, "errors": []},
         "stores": {"created": 0, "updated": 0, "skipped": 0, "duplicate_codes": 0, "errors": []},
         "unknown_sheets": buckets.get("_unknown", []),
     }
+    seen_rep_codes: set[str] = set()
 
     for i, row in enumerate(buckets.get("dealers", []), start=2):
         code = pick(row, DEALER_CODE_ALIASES)
@@ -222,24 +269,28 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
             summary["dealers"]["created"] += 1
 
     for i, row in enumerate(buckets.get("reps", []), start=2):
-        code = pick(row, REP_CODE_ALIASES)
+        code = normalize_employee_code(pick(row, REP_CODE_ALIASES))
         name = pick(row, REP_NAME_ALIASES)
-        phone = normalize_phone(pick(row, REP_PHONE_ALIASES))
+        phone4 = normalize_phone_last4(pick(row, REP_PHONE_ALIASES))
         dealer_code = pick(row, DEALER_CODE_ALIASES)
         dealer_name = pick(row, DEALER_NAME_ALIASES)
         if not code:
             summary["reps"]["skipped"] += 1
             summary["reps"]["errors"].append(f"영업사원 {i}행: 고유ID 필요")
             continue
-        existing = conn.execute("SELECT * FROM reps WHERE employee_code = ?", (code,)).fetchone()
+        seen_rep_codes.add(code)
+        existing = find_rep(conn, code)
 
-        # SWING ID + 전화번호만 담긴 파일도 받는다. 이미 있는 사원이면 이름/소속 없이 전화번호만 채운다.
+        # SWING ID + 전화번호 뒤 4자리만 담긴 파일도 받는다. 이미 있는 사원이면 번호만 채운다.
         if existing and not name and not dealer_code and not dealer_name:
-            if not phone:
+            if not phone4:
                 summary["reps"]["skipped"] += 1
                 summary["reps"]["errors"].append(f"영업사원 {code}: 채울 내용이 없음 (이름/소속대리점/전화번호)")
                 continue
-            conn.execute("UPDATE reps SET phone = ? WHERE id = ?", (phone, existing["id"]))
+            conn.execute(
+                "UPDATE reps SET phone_last4 = ?, employee_code = ? WHERE id = ?",
+                (phone4, code, existing["id"]),
+            )
             summary["reps"]["updated"] += 1
             continue
 
@@ -254,11 +305,11 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
             continue
         if existing:
             conn.execute(
-                "UPDATE reps SET name = ?, dealer_id = ? WHERE id = ?",
-                (name, dealer["id"], existing["id"]),
+                "UPDATE reps SET name = ?, dealer_id = ?, employee_code = ? WHERE id = ?",
+                (name, dealer["id"], code, existing["id"]),
             )
-            if phone:
-                conn.execute("UPDATE reps SET phone = ? WHERE id = ?", (phone, existing["id"]))
+            if phone4:
+                conn.execute("UPDATE reps SET phone_last4 = ? WHERE id = ?", (phone4, existing["id"]))
             if not existing["password_hash"]:
                 # 초기 비밀번호 = 고유ID. 첫 로그인 때 반드시 바꾸게 표시한다.
                 conn.execute(
@@ -270,13 +321,20 @@ def upsert_masters(conn, buckets: dict[str, list[dict[str, str]]], now_iso: str,
             conn.execute(
                 """
                 INSERT INTO reps (
-                    id, dealer_id, name, employee_code, password_hash, device_id, created_at, phone,
-                    must_change_password
+                    id, dealer_id, name, employee_code, password_hash, device_id, created_at,
+                    phone_last4, must_change_password
                 ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1)
                 """,
-                (new_id(), dealer["id"], name, code, generate_password_hash(code), now_iso, phone or None),
+                (new_id(), dealer["id"], name, code, generate_password_hash(code), now_iso, phone4 or None),
             )
             summary["reps"]["created"] += 1
+
+    if remove_missing_reps and seen_rep_codes:
+        for row in conn.execute("SELECT id, employee_code FROM reps").fetchall():
+            if normalize_employee_code(row["employee_code"]) in seen_rep_codes:
+                continue
+            delete_rep(conn, row["id"])
+            summary["reps"]["removed"] += 1
 
     seen_codes: set[str] = set()
     for i, row in enumerate(buckets.get("stores", []), start=2):

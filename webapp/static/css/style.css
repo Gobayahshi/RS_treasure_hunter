@@ -146,6 +146,21 @@ main {
   margin-top: 8px;
 }
 
+/* 관리자 화면: 체크박스 한 줄 */
+.check-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  font-size: 13px;
+  color: #374151;
+}
+
+.check-line input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
 .login-howto-title {
   margin: 0 0 8px;
   font-size: 13px;

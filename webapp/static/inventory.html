@@ -63,9 +63,9 @@
 
       <div id="chatResetBox" class="reset-box hidden">
         <p class="login-howto-title">비밀번호 재설정</p>
-        <p class="muted small">고유ID(SWING ID)와 등록된 전화번호가 맞으면 바로 새 비밀번호를 정할 수 있습니다.</p>
+        <p class="muted small">고유ID(SWING ID)와 등록된 전화번호 뒤 4자리가 맞으면 바로 새 비밀번호를 정할 수 있습니다.</p>
         <input id="chatResetCode" type="text" placeholder="고유ID (SWING ID)" autocomplete="username" />
-        <input id="chatResetPhone" type="tel" placeholder="전화번호 (예: 010-1234-5678)" autocomplete="tel" />
+        <input id="chatResetPhone" type="tel" inputmode="numeric" maxlength="4" placeholder="전화번호 뒤 4자리 (예: 5678)" autocomplete="off" />
         <input id="chatResetPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
         <input id="chatResetPasswordConfirm" type="password" placeholder="새 비밀번호 확인" autocomplete="new-password" />
         <button type="button" id="chatResetBtn" class="btn-primary">비밀번호 재설정</button>
