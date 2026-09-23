@@ -26,6 +26,8 @@
 - 테스트: `cd webapp && pip install -r requirements-dev.txt && python -m pytest`
   - 임시 DB로 돌아서 `webapp/rs_treasure.db`를 건드리지 않는다.
   - **코드를 고치면 테스트를 추가하고 전부 통과시킨다.**
+  - **`tests/*.py` 파일 맨 위(모듈 최상단)에서 `import app` / `from db import ...` / `from app import ...` 를 절대 쓰지 않는다.** pytest는 테스트를 실행하기 전에 모든 파일을 먼저 import(수집)하는데, 이게 `conftest.py`의 `server` fixture(임시 DB_PATH 설정)보다 먼저 실행돼 버린다. `db.py`의 `DB_PATH`는 `db` 모듈을 맨 처음 import할 때 딱 한 번만 계산되므로, 한 파일이라도 최상단에서 먼저 import하면 그 프로세스에서 도는 테스트 전부가 (다른 파일까지) 실제 로컬 DB(`webapp/rs_treasure.db`)에 쓰게 된다 — 에러 없이 조용히 샌다. `app`/`db`가 필요하면 항상 함수 안에서, `server` fixture를 받은 뒤에 import한다. `conftest.py`의 `server` fixture가 `db.DB_PATH`를 확인해 어긋나면 즉시 assert 로 실패하지만, **이건 안전망이지 예방책이 아니다** — 애초에 최상단 import를 만들지 않는 게 원칙이다.
+    - 2026-09-22~23 `test_password.py`의 최상단 `import app` 때문에 이 버그가 실제로 터졌다: pytest를 돌릴 때마다 로컬 `webapp/rs_treasure.db`에 대리점 697개·사원 42명 등 테스트 쓰레기가 계속 쌓였고, 테스트의 "파일에 없는 사원 삭제" 로직이 실제 방문·포인트·리워드 기록(24/15/6건)까지 지워버렸다. 2026-09-23 원인 수정 + seed로 로컬 DB 재구성 + 실제 데이터(Sales_info 184명, RS팀 SKT 계정 16명, 대리점별 테스트 계정) 다시 반영으로 복구했다. 지워진 방문 기록은 백업이 없어 복구 못했다.
 - 배포: **Render + gunicorn (`Procfile`)만 대상으로 한다.**
   - `master`에 push하면 운영에 반영될 수 있다. 중대한 보안 문제나 되돌리기 어려운 변경이 아니면 push 전에 따로 확인받지 않고 진행한다 (2026-09-18 사용자 결정).
 - **사내 Playground는 절대 고려하지 않는다.**
@@ -210,4 +212,5 @@ webapp/
 - 2026-09-17: 1단계 계정 통합. SKT 직원 역할, 사원 고유ID로 재고 로그인, 임시 계정 삭제, `_partner_upload_filter` 복구.
 - 2026-09-22: Sales_info 기반 사원 등록, 전화번호 뒤 4자리 재설정, 고유ID 대소문자 무시, 테스트 계정.
 - 2026-09-23: 세 화면(`/`, `/admin`, `/inventory`) 로그인 토큰 공유(한 번 로그인하면 다 통과), 관리자용 영업사원 추가/편집/삭제 화면, RS팀 자체 SKT 계정 16명 엑셀 일괄 등록.
+- 2026-09-23: pytest 테스트 격리 버그 발견·수정 (위 "테스트" 항목 참고) — 로컬 `webapp/rs_treasure.db`가 테스트 쓰레기로 오염되고 실제 방문·포인트 기록이 삭제된 것을 발견, seed로 재구성 후 실제 데이터만 다시 반영.
 - 로드맵 후보: 보물찾기 운영 준비(규칙 튜닝) → 두 기능 연결(체화 재고 → rare 보물) → 판매점 입력(프로젝트 3).
