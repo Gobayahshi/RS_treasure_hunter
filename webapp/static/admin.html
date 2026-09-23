@@ -57,7 +57,11 @@
           <input id="accountUsername" type="text" placeholder="아이디 (예: 사번)" autocomplete="off" />
           <input id="accountPassword" type="text" placeholder="초기 비밀번호 (4자 이상)" autocomplete="off" />
         </div>
-        <button id="createAccountBtn" class="btn-primary">SKT 직원 계정 만들기</button>
+        <select id="accountRole">
+          <option value="staff">SKT 직원 (조회 전용)</option>
+          <option value="super">SKT 총괄 (모든 기능)</option>
+        </select>
+        <button id="createAccountBtn" class="btn-primary">SKT 계정 만들기</button>
         <p id="accountMessage" class="muted small"></p>
       </div>
       <div id="accountList" class="list"></div>
@@ -157,6 +161,14 @@
     </section>
 
     <section class="screen" data-tab="account">
+      <h2>대리점</h2>
+      <p class="muted small">대리점명·대리점코드로 검색해서 이름/코드를 수정하거나 대리점을 삭제합니다.</p>
+      <input id="dealerSearch" type="search" placeholder="대리점명·코드 검색" autocomplete="off" />
+      <p id="dealerSearchMessage" class="muted small"></p>
+      <div id="dealerSearchList" class="list"></div>
+    </section>
+
+    <section class="screen" data-tab="account">
       <h2>영업사원</h2>
 
       <div class="card" data-super-only>
@@ -216,7 +228,10 @@
 
     <section class="screen" data-tab="ops">
       <h2>랭킹보드</h2>
+      <h3 class="section-title">영업사원 (상위 10명)</h3>
       <div id="leaderboard" class="list"></div>
+      <h3 class="section-title">대리점 (전체)</h3>
+      <div id="dealerLeaderboard" class="list"></div>
     </section>
 
     <section class="screen" data-tab="inventory-ops">

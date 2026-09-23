@@ -271,3 +271,26 @@ def test_cancelled_reward_returns_points(client, fixtures, rep_token):
         conn.execute("UPDATE rewards SET status = 'cancelled' WHERE id = ?", (reward_id,))
     wallet = client.get(f"/api/points/{fixtures['rep_id']}", headers=auth(rep_token)).get_json()
     assert wallet["balance"] == earned
+
+
+def test_leaderboard_caps_reps_but_lists_all_dealers(client, admin_token, fixtures, rep_token):
+    import uuid
+    from datetime import datetime
+
+    from db import db_session
+
+    complete_visit(client, rep_token, fixtures["store_id"])
+
+    # 대리점을 더 만들어서(포인트 없이도) 대리점 목록엔 전부 보이는지 확인한다.
+    now = datetime.utcnow().isoformat()
+    with db_session() as conn:
+        conn.execute(
+            "INSERT INTO dealers (id, dealer_code, name, created_at) VALUES (?,?,?,?)",
+            (uuid.uuid4().hex, f"D{uuid.uuid4().hex[:5]}", "포인트없는대리점", now),
+        )
+
+    body = client.get("/api/points", headers=admin_auth(admin_token)).get_json()
+    assert "reps" in body and "dealers" in body
+    assert len(body["reps"]) <= 10
+    assert len(body["dealers"]) >= 2
+    assert any(d["name"] == "포인트없는대리점" for d in body["dealers"])

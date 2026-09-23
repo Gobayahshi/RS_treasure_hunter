@@ -24,6 +24,8 @@ RS팀 대리점 리스트.xlsx
 # 실제 아이디·비밀번호가 든 파일은 이름이 달라져도 걸러지도록 패턴으로도 막는다.
 *직원 리스트*.xlsx
 *비밀번호*.xlsx
+*계정_ID_정리*.xlsx
+~$*.xlsx
 
 # 시연용
 webapp/static/inventory-preview.html

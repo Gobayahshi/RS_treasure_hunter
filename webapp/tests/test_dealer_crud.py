@@ -12,6 +12,19 @@ def rep_auth(token):
     return {"X-Rep-Token": token}
 
 
+def make_dealer(code=None, name="검색용대리점"):
+    from db import db_session
+
+    code = code or f"D{uuid.uuid4().hex[:5]}"
+    with db_session() as conn:
+        dealer_id = uuid.uuid4().hex
+        conn.execute(
+            "INSERT INTO dealers (id, dealer_code, name, created_at) VALUES (?,?,?,?)",
+            (dealer_id, code, name, datetime.utcnow().isoformat()),
+        )
+    return dealer_id, code
+
+
 def test_super_can_delete_dealer_with_reps_and_records(client, admin_token, fixtures, rep_token):
     from conftest import complete_visit
     from db import db_session
@@ -80,3 +93,57 @@ def test_delete_dealer_requires_super(client, admin_token, rep_token, fixtures):
         f"/api/dealers/{fixtures['dealer_id']}", headers=admin_auth(rep_token)
     ).status_code == 401
     assert client.delete(f"/api/dealers/{fixtures['dealer_id']}").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 수정 (PATCH /api/dealers/<id>)
+# ---------------------------------------------------------------------------
+
+
+def test_super_can_rename_dealer(client, admin_token, fixtures):
+    new_code = f"REN{uuid.uuid4().hex[:6].upper()}"
+    res = client.patch(
+        f"/api/dealers/{fixtures['dealer_id']}",
+        json={"name": "새대리점이름", "dealer_code": new_code},
+        headers=admin_auth(admin_token),
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["name"] == "새대리점이름"
+    assert body["dealer_code"] == new_code
+
+
+def test_update_dealer_rejects_duplicate_code(client, admin_token, fixtures):
+    _, other_code = make_dealer()
+    res = client.patch(
+        f"/api/dealers/{fixtures['dealer_id']}",
+        json={"dealer_code": other_code},
+        headers=admin_auth(admin_token),
+    )
+    assert res.status_code == 409
+    assert res.get_json()["error"] == "DEALER_CODE_EXISTS"
+
+
+def test_update_dealer_with_no_fields_is_rejected(client, admin_token, fixtures):
+    res = client.patch(f"/api/dealers/{fixtures['dealer_id']}", json={}, headers=admin_auth(admin_token))
+    assert res.status_code == 400
+
+
+def test_update_missing_dealer_404(client, admin_token):
+    res = client.patch(
+        f"/api/dealers/{uuid.uuid4().hex}", json={"name": "x"}, headers=admin_auth(admin_token)
+    )
+    assert res.status_code == 404
+
+
+def test_update_dealer_requires_super(client, admin_token, rep_token, fixtures):
+    from test_accounts import create_staff
+
+    _, staff_token = create_staff(client, admin_token)
+    body = {"name": "x"}
+    assert client.patch(
+        f"/api/dealers/{fixtures['dealer_id']}", json=body, headers=admin_auth(staff_token)
+    ).status_code == 403
+    assert client.patch(
+        f"/api/dealers/{fixtures['dealer_id']}", json=body, headers=admin_auth(rep_token)
+    ).status_code == 401

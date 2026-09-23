@@ -1291,6 +1291,43 @@ def list_dealers():
         return jsonify([row_to_dict(r) for r in rows])
 
 
+@app.route("/api/dealers/<dealer_id>", methods=["PATCH"])
+@require_admin
+def update_dealer(dealer_id):
+    """관리자가 대리점명·대리점코드를 직접 고친다. 넘긴 항목만 바뀐다."""
+    body = request.get_json(force=True, silent=True) or {}
+    with db_session() as conn:
+        existing = conn.execute("SELECT * FROM dealers WHERE id = ?", (dealer_id,)).fetchone()
+        if not existing:
+            return jsonify({"error": "DEALER_NOT_FOUND"}), 404
+
+        updates: dict = {}
+        if "name" in body:
+            name = (body.get("name") or "").strip()
+            if not name:
+                return jsonify({"error": "BAD_INPUT", "message": "대리점명을 입력해주세요."}), 400
+            updates["name"] = name
+
+        if "dealer_code" in body:
+            dealer_code = (body.get("dealer_code") or "").strip()
+            if not dealer_code:
+                return jsonify({"error": "BAD_INPUT", "message": "대리점코드를 입력해주세요."}), 400
+            clash = conn.execute(
+                "SELECT 1 FROM dealers WHERE dealer_code = ? AND id != ?", (dealer_code, dealer_id)
+            ).fetchone()
+            if clash:
+                return jsonify({"error": "DEALER_CODE_EXISTS", "message": "이미 있는 대리점코드입니다."}), 409
+            updates["dealer_code"] = dealer_code
+
+        if not updates:
+            return jsonify({"error": "BAD_INPUT", "message": "바꿀 값이 없습니다."}), 400
+
+        set_sql = ", ".join(f"{key} = ?" for key in updates)
+        conn.execute(f"UPDATE dealers SET {set_sql} WHERE id = ?", (*updates.values(), dealer_id))
+        row = conn.execute("SELECT * FROM dealers WHERE id = ?", (dealer_id,)).fetchone()
+        return jsonify(row_to_dict(row))
+
+
 @app.route("/api/dealers/<dealer_id>", methods=["DELETE"])
 @require_admin
 def remove_dealer(dealer_id):
@@ -1385,10 +1422,13 @@ def create_skt_staff_account():
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
     name = (body.get("name") or "").strip() or None
+    role = (body.get("role") or "staff").strip()
     if not username or not password:
         return jsonify({"error": "BAD_INPUT", "message": "아이디와 초기 비밀번호를 입력해주세요."}), 400
     if len(password) < 4:
         return jsonify({"error": "PASSWORD_TOO_SHORT", "message": "비밀번호는 4자 이상이어야 합니다."}), 400
+    if role not in SKT_ROLES:
+        return jsonify({"error": "BAD_ROLE", "message": "super 또는 staff 여야 합니다."}), 400
     with db_session() as conn:
         if conn.execute("SELECT 1 FROM admins WHERE username = ?", (username,)).fetchone():
             return jsonify({"error": "USERNAME_EXISTS", "message": "이미 있는 아이디입니다."}), 409
@@ -1402,9 +1442,9 @@ def create_skt_staff_account():
         conn.execute(
             """
             INSERT INTO admins (id, username, password_hash, created_at, role, name, must_change_password)
-            VALUES (?, ?, ?, ?, 'staff', ?, 1)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
             """,
-            (account_id, username, hash_password(password), now_iso(), name),
+            (account_id, username, hash_password(password), now_iso(), role, name),
         )
         row = conn.execute("SELECT * FROM admins WHERE id = ?", (account_id,)).fetchone()
         return jsonify(_public_account(row)), 201
@@ -2322,17 +2362,29 @@ def get_points(rep_id):
 @app.route("/api/points")
 @require_skt
 def leaderboard():
+    """관리자 랭킹보드. 직원은 상위 10명만, 대리점은 전부 보여준다."""
     with db_session() as conn:
-        rows = conn.execute(
+        reps = conn.execute(
             """
             SELECT r.id as rep_id, r.name, r.employee_code, COALESCE(SUM(pl.points), 0) as total_points
             FROM reps r
             LEFT JOIN point_ledger pl ON pl.rep_id = r.id
             GROUP BY r.id
             ORDER BY total_points DESC
+            LIMIT 10
             """
         ).fetchall()
-        return jsonify([row_to_dict(r) for r in rows])
+        dealers = conn.execute(
+            """
+            SELECT d.id as dealer_id, d.name, d.dealer_code, COALESCE(SUM(pl.points), 0) as total_points
+            FROM dealers d
+            LEFT JOIN reps r ON r.dealer_id = d.id
+            LEFT JOIN point_ledger pl ON pl.rep_id = r.id
+            GROUP BY d.id
+            ORDER BY total_points DESC
+            """
+        ).fetchall()
+        return jsonify({"reps": [row_to_dict(r) for r in reps], "dealers": [row_to_dict(d) for d in dealers]})
 
 
 @app.route("/api/stats/rankings")

@@ -13,6 +13,7 @@ let adminCanEdit = false; // SKT 총괄만 true. SKT 직원은 조회 전용.
 let allReps = [];
 let allDealers = [];
 let editingRepId = ""; // 지금 인라인 편집 중인 영업사원 id
+let editingDealerId = ""; // 지금 인라인 편집 중인 대리점 id
 let activeAdminTab = "ops";
 
 function $(id) {
@@ -676,6 +677,104 @@ async function loadDealers() {
       .map((d) => `<option value="${escHtml(d.dealer_code)}">${escHtml(d.name)}</option>`)
       .join("");
   }
+  renderDealerSearch();
+}
+
+function renderDealerSearch() {
+  const container = $("dealerSearchList");
+  if (!container) return;
+  const q = String(($("dealerSearch") || {}).value || "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+  if (!q) {
+    container.innerHTML = '<p class="muted small">검색어를 입력하면 대리점을 찾습니다.</p>';
+    return;
+  }
+  const rows = allDealers.filter((d) =>
+    `${d.name}${d.dealer_code}`.replace(/\s+/g, "").toLowerCase().includes(q)
+  );
+  container.innerHTML = "";
+  if (!rows.length) {
+    container.innerHTML = '<p class="empty">검색 결과가 없습니다.</p>';
+    return;
+  }
+  for (const d of rows) {
+    const el = document.createElement("div");
+    el.className = "item-card";
+    if (adminCanEdit && editingDealerId === d.id) {
+      el.innerHTML = `
+        <div class="row">
+          <input data-edit-dealer-name value="${escHtml(d.name)}" placeholder="대리점명" />
+          <input data-edit-dealer-code value="${escHtml(d.dealer_code)}" placeholder="대리점코드" />
+        </div>
+        <div class="row planted-actions">
+          <button class="btn-primary compact" data-save>저장</button>
+          <button class="btn-secondary compact" data-cancel>취소</button>
+        </div>
+      `;
+      el.querySelector("[data-save]").addEventListener("click", async () => {
+        const payload = {
+          name: el.querySelector("[data-edit-dealer-name]").value.trim(),
+          dealer_code: el.querySelector("[data-edit-dealer-code]").value.trim(),
+        };
+        try {
+          await api(`/dealers/${d.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+          editingDealerId = "";
+          $("dealerSearchMessage").textContent = `${payload.dealer_code} 대리점 정보를 저장했습니다.`;
+          await loadDealers();
+        } catch (err) {
+          $("dealerSearchMessage").textContent = String(err.message || err);
+        }
+      });
+      el.querySelector("[data-cancel]").addEventListener("click", () => {
+        editingDealerId = "";
+        renderDealerSearch();
+      });
+      container.appendChild(el);
+      continue;
+    }
+    el.innerHTML = `
+      <div class="between" style="margin-top:0">
+        <div class="store-name">${escHtml(d.name)} <span class="muted">(${escHtml(d.dealer_code)})</span></div>
+        ${
+          adminCanEdit
+            ? `<div class="row" style="margin-top:0">
+                 <button class="btn-secondary compact" data-edit>편집</button>
+                 <button class="btn-secondary compact" data-delete>삭제</button>
+               </div>`
+            : ""
+        }
+      </div>
+    `;
+    const editBtn = el.querySelector("[data-edit]");
+    if (editBtn) {
+      editBtn.addEventListener("click", () => {
+        editingDealerId = d.id;
+        renderDealerSearch();
+      });
+    }
+    const deleteBtn = el.querySelector("[data-delete]");
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", async () => {
+        if (
+          !confirm(
+            `${d.dealer_code} 대리점을 삭제할까요? 소속 영업사원 계정과 방문·포인트·리워드 기록까지 함께 사라지고 되돌릴 수 없습니다.`
+          )
+        ) {
+          return;
+        }
+        try {
+          await api(`/dealers/${d.id}`, { method: "DELETE" });
+          $("dealerSearchMessage").textContent = `${d.dealer_code} 대리점을 삭제했습니다.`;
+          await loadDealers();
+          await loadReps();
+        } catch (err) {
+          $("dealerSearchMessage").textContent = String(err.message || err);
+        }
+      });
+    }
+    container.appendChild(el);
+  }
 }
 
 async function handleAddRep() {
@@ -719,28 +818,41 @@ async function handleAddRep() {
   }
 }
 
+let repSearchTimer = null;
+
+function handleRepSearchInput() {
+  if (repSearchTimer) clearTimeout(repSearchTimer);
+  repSearchTimer = setTimeout(loadReps, 300);
+}
+
 async function loadReps() {
+  const q = String(($("repSearch") || {}).value || "").trim();
+  if (!q) {
+    allReps = [];
+    const empty = $("repList");
+    if (empty) empty.innerHTML = '<p class="muted small">검색어를 입력하면 영업사원을 찾습니다.</p>';
+    return;
+  }
   allReps = await api("/reps");
   renderReps();
 }
 
 function renderReps() {
   const container = $("repList");
-  container.innerHTML = "";
-  if (allReps.length === 0) {
-    container.innerHTML = '<p class="empty">등록된 영업사원이 없습니다. 엑셀을 올려주세요.</p>';
-    return;
-  }
   const q = String(($("repSearch") || {}).value || "")
     .replace(/\s+/g, "")
     .toLowerCase();
-  const rows = allReps.filter((r) => {
-    if (!q) return true;
-    return `${r.name}${r.employee_code}${r.dealer_name || ""}${r.dealer_code || ""}`
+  if (!q) {
+    container.innerHTML = '<p class="muted small">검색어를 입력하면 영업사원을 찾습니다.</p>';
+    return;
+  }
+  const rows = allReps.filter((r) =>
+    `${r.name}${r.employee_code}${r.dealer_name || ""}${r.dealer_code || ""}`
       .replace(/\s+/g, "")
       .toLowerCase()
-      .includes(q);
-  });
+      .includes(q)
+  );
+  container.innerHTML = "";
   if (!rows.length) {
     container.innerHTML = '<p class="empty">검색 결과가 없습니다.</p>';
     return;
@@ -936,6 +1048,7 @@ async function loadAccounts() {
 async function handleCreateAccount() {
   const username = $("accountUsername").value.trim();
   const password = $("accountPassword").value;
+  const role = $("accountRole") ? $("accountRole").value : "staff";
   const msg = $("accountMessage");
   if (!username || !password) {
     msg.textContent = "아이디와 초기 비밀번호를 입력해주세요.";
@@ -944,11 +1057,12 @@ async function handleCreateAccount() {
   try {
     await api("/admin/accounts", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, role }),
     });
     $("accountUsername").value = "";
     $("accountPassword").value = "";
-    msg.textContent = `'${username}' SKT 직원 계정을 만들었습니다. 초기 비밀번호를 본인에게 전달하세요.`;
+    const roleLabel = role === "super" ? "SKT 총괄" : "SKT 직원";
+    msg.textContent = `'${username}' ${roleLabel} 계정을 만들었습니다. 초기 비밀번호를 본인에게 전달하세요.`;
     await loadAccounts();
   } catch (err) {
     msg.textContent = String(err.message || err);
@@ -1022,18 +1136,34 @@ async function loadGeocodeStatus() {
 }
 
 async function loadLeaderboard() {
-  const rows = await api("/points");
+  const data = await api("/points");
   const container = $("leaderboard");
   container.innerHTML = "";
-  if (rows.length === 0) {
+  const reps = data.reps || [];
+  if (reps.length === 0) {
     container.innerHTML = '<p class="empty">등록된 사원이 없습니다.</p>';
+  } else {
+    reps.forEach((r, idx) => {
+      const el = document.createElement("div");
+      el.className = "rank-row";
+      el.innerHTML = `<span>${idx + 1}. ${escHtml(r.name)} (${escHtml(r.employee_code)})</span><span class="ledger-points">${r.total_points}P</span>`;
+      container.appendChild(el);
+    });
+  }
+
+  const dealerContainer = $("dealerLeaderboard");
+  if (!dealerContainer) return;
+  dealerContainer.innerHTML = "";
+  const dealers = data.dealers || [];
+  if (dealers.length === 0) {
+    dealerContainer.innerHTML = '<p class="empty">등록된 대리점이 없습니다.</p>';
     return;
   }
-  rows.forEach((r, idx) => {
+  dealers.forEach((d, idx) => {
     const el = document.createElement("div");
     el.className = "rank-row";
-    el.innerHTML = `<span>${idx + 1}. ${escHtml(r.name)} (${escHtml(r.employee_code)})</span><span class="ledger-points">${r.total_points}P</span>`;
-    container.appendChild(el);
+    el.innerHTML = `<span>${idx + 1}. ${escHtml(d.name)} (${escHtml(d.dealer_code)})</span><span class="ledger-points">${d.total_points}P</span>`;
+    dealerContainer.appendChild(el);
   });
 }
 
@@ -1247,7 +1377,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("refreshGeocodeStatusBtn").addEventListener("click", loadGeocodeStatus);
   if ($("refreshAccountsBtn")) $("refreshAccountsBtn").addEventListener("click", loadAccounts);
   if ($("createAccountBtn")) $("createAccountBtn").addEventListener("click", handleCreateAccount);
-  if ($("repSearch")) $("repSearch").addEventListener("input", renderReps);
+  if ($("repSearch")) $("repSearch").addEventListener("input", handleRepSearchInput);
+  if ($("dealerSearch")) $("dealerSearch").addEventListener("input", renderDealerSearch);
   if ($("addRepBtn")) $("addRepBtn").addEventListener("click", handleAddRep);
   if ($("storeSearch")) $("storeSearch").addEventListener("input", handleStoreSearchInput);
   $("importBtn").addEventListener("click", handleImport);

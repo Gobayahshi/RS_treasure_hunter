@@ -36,6 +36,50 @@ def create_staff(client, admin_token, username=None, password="staff1234"):
 
 
 # ---------------------------------------------------------------------------
+# SKT 계정 생성 - role 지정
+# ---------------------------------------------------------------------------
+
+
+def test_can_create_super_account_via_role(client, admin_token):
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    res = client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234", "role": "super", "name": "새총괄"},
+        headers=admin_auth(admin_token),
+    )
+    assert res.status_code == 201
+    body = res.get_json()
+    assert body["role"] == "super"
+    assert body["name"] == "새총괄"
+
+    login = client.post("/api/admin/login", json={"username": username, "password": "temp1234"})
+    assert login.status_code == 200
+    assert login.get_json()["can_edit"] is True
+
+
+def test_create_account_defaults_to_staff_role(client, admin_token):
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    res = client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234"},
+        headers=admin_auth(admin_token),
+    )
+    assert res.status_code == 201
+    assert res.get_json()["role"] == "staff"
+
+
+def test_create_account_rejects_bad_role(client, admin_token):
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    res = client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234", "role": "owner"},
+        headers=admin_auth(admin_token),
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "BAD_ROLE"
+
+
+# ---------------------------------------------------------------------------
 # 임시 대리점 계정 제거
 # ---------------------------------------------------------------------------
 
