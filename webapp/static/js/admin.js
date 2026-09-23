@@ -996,10 +996,11 @@ async function loadAccounts() {
     const el = document.createElement("div");
     el.className = "item-card";
     const isStaff = a.role === "staff";
+    const label = a.name && a.name !== a.username ? `${escHtml(a.name)} (${escHtml(a.username)})` : escHtml(a.username);
     el.innerHTML = `
       <div class="between" style="margin-top:0">
         <div>
-          <div class="store-name">${escHtml(a.username)}</div>
+          <div class="store-name">${label}</div>
           <div class="muted small">${isStaff ? "SKT 직원 · 조회 전용" : "SKT 총괄"}</div>
         </div>
         ${isStaff ? '<button class="btn-secondary compact" data-remove>삭제</button>' : ""}
@@ -1225,9 +1226,10 @@ async function handleSpawn() {
 
 function formatImportSummary(summary) {
   const lines = [];
-  for (const key of ["dealers", "reps", "stores"]) {
-    const label = { dealers: "대리점", reps: "영업사원", stores: "판매점" }[key];
+  for (const key of ["dealers", "reps", "stores", "skt_accounts"]) {
+    const label = { dealers: "대리점", reps: "영업사원", stores: "판매점", skt_accounts: "SKT 계정" }[key];
     const s = summary[key];
+    if (!s) continue;
     lines.push(
       `${label}: 신규 ${s.created} / 수정 ${s.updated} / 건너뜀 ${s.skipped}` +
         `${s.removed ? ` / 삭제 ${s.removed}` : ""}${s.duplicate_codes ? ` / 중복코드 ${s.duplicate_codes}` : ""}`

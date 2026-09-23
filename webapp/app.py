@@ -301,7 +301,7 @@ def _admin_from_token(conn, token: str):
         return None
     row = conn.execute(
         """
-        SELECT a.id, a.username, COALESCE(NULLIF(a.role, ''), 'super') AS role,
+        SELECT a.id, a.username, a.name, COALESCE(NULLIF(a.role, ''), 'super') AS role,
                COALESCE(a.must_change_password, 0) AS must_change_password,
                s.created_at AS session_created_at
         FROM admin_sessions s
@@ -322,7 +322,7 @@ def _admin_from_token(conn, token: str):
         "kind": "skt",
         "id": row["id"],
         "username": row["username"],
-        "name": row["username"],
+        "name": row["name"] or row["username"],
         "role": row["role"],
         "must_change_password": bool(row["must_change_password"]),
         "dealer_id": "",
@@ -1328,9 +1328,12 @@ def update_rep_dealer_role(rep_id):
 
 
 def _public_account(row) -> dict:
+    data = row_to_dict(row)
+    name = data.get("name") if data else None
     return {
         "id": row["id"],
         "username": row["username"],
+        "name": name or row["username"],
         "role": row["role"] or "super",
         "created_at": row["created_at"],
     }
@@ -1352,6 +1355,7 @@ def create_skt_staff_account():
     body = request.get_json(force=True, silent=True) or {}
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
+    name = (body.get("name") or "").strip() or None
     if not username or not password:
         return jsonify({"error": "BAD_INPUT", "message": "아이디와 초기 비밀번호를 입력해주세요."}), 400
     if len(password) < 4:
@@ -1368,10 +1372,10 @@ def create_skt_staff_account():
         # 발급받은 초기 비밀번호는 첫 로그인 때 본인이 바꾼다.
         conn.execute(
             """
-            INSERT INTO admins (id, username, password_hash, created_at, role, must_change_password)
-            VALUES (?, ?, ?, ?, 'staff', 1)
+            INSERT INTO admins (id, username, password_hash, created_at, role, name, must_change_password)
+            VALUES (?, ?, ?, ?, 'staff', ?, 1)
             """,
-            (account_id, username, hash_password(password), now_iso()),
+            (account_id, username, hash_password(password), now_iso(), name),
         )
         row = conn.execute("SELECT * FROM admins WHERE id = ?", (account_id,)).fetchone()
         return jsonify(_public_account(row)), 201

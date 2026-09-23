@@ -29,6 +29,9 @@ REP_PHONE_ALIASES = {
     "전화번호뒤4자리", "전화뒤4자리", "휴대폰뒤4자리", "뒤4자리", "전화번호4자리",
     "전화번호", "휴대폰", "휴대폰번호", "핸드폰", "핸드폰번호", "연락처", "phone", "mobile", "tel", "phonelast4",
 }
+# SKT 총괄/직원(RS팀 자체 직원) 계정 일괄 등록용. 이 열이 있으면 대리점 사원(reps)이 아니라
+# SKT 계정(admins)으로 분류한다 — 대리점 업로드에는 없는, 이 시트만의 고유한 신호다.
+SKT_ROLE_ALIASES = {"구분/권한", "구분,권한", "구분권한", "구분", "권한", "role", "authority"}
 STORE_CODE_ALIASES = {"판매점코드", "매장코드", "점포코드", "storecode", "store_code"}
 STORE_NAME_ALIASES = {"판매점명", "매장명", "점포명", "storename", "store_name"}
 STORE_ADDR_ALIASES = {"기본주소", "주소", "판매점주소", "매장주소", "address"}
@@ -136,6 +139,9 @@ def guess_kind(filename: str, sheet_name: str, headers: set[str]) -> str | None:
         return "inventory"
     if "보유처매장코드" in headers or "대표상품명" in headers:
         return "inventory"
+    # "구분/권한" 열은 SKT 팀 자체 직원(RS팀) 계정 시트에만 있다. 대리점 사원과 헷갈리기 전에 먼저 잡는다.
+    if headers & SKT_ROLE_ALIASES:
+        return "skt_accounts"
     # 시트명이 파일명보다 우선이다. (파일명에 '판매점'이 들어 있어도 대리점 시트를 판매점으로 오인하지 않게)
     if "영업" in sheet or "사원" in sheet or "rep" in sheet:
         return "reps"
@@ -169,7 +175,13 @@ def guess_kind(filename: str, sheet_name: str, headers: set[str]) -> str | None:
 
 
 def parse_uploads(files: list[tuple[str, bytes]]) -> dict[str, list[dict[str, str]]]:
-    buckets: dict[str, list[dict[str, str]]] = {"dealers": [], "reps": [], "stores": [], "inventory": []}
+    buckets: dict[str, list[dict[str, str]]] = {
+        "dealers": [],
+        "reps": [],
+        "stores": [],
+        "inventory": [],
+        "skt_accounts": [],
+    }
     unknown_sheets: list[str] = []
 
     for filename, data in files:
@@ -244,6 +256,7 @@ def upsert_masters(
         "dealers": {"created": 0, "updated": 0, "skipped": 0, "errors": []},
         "reps": {"created": 0, "updated": 0, "skipped": 0, "removed": 0, "errors": []},
         "stores": {"created": 0, "updated": 0, "skipped": 0, "duplicate_codes": 0, "errors": []},
+        "skt_accounts": {"created": 0, "updated": 0, "skipped": 0, "errors": []},
         "unknown_sheets": buckets.get("_unknown", []),
     }
     seen_rep_codes: set[str] = set()
@@ -335,6 +348,44 @@ def upsert_masters(
                 continue
             delete_rep(conn, row["id"])
             summary["reps"]["removed"] += 1
+
+    # SKT 자체 직원(RS팀) 계정 일괄 등록. 컬럼: 이름 / ID(사번) / PW / 구분·권한(admin 또는 그 외=SKT).
+    # 초기 비밀번호는 항상 사번(ID) 그대로다 — PW 열은 참고용이고 실제로는 쓰지 않는다.
+    for i, row in enumerate(buckets.get("skt_accounts", []), start=2):
+        username = normalize_employee_code(pick(row, REP_CODE_ALIASES))
+        name = pick(row, REP_NAME_ALIASES)
+        role_raw = pick(row, SKT_ROLE_ALIASES).strip().lower()
+        role = "super" if role_raw == "admin" else "staff"
+        if not username:
+            summary["skt_accounts"]["skipped"] += 1
+            summary["skt_accounts"]["errors"].append(f"SKT 계정 {i}행: 사번(ID) 필요")
+            continue
+        # 대리점 사원 고유ID와 겹치면 재고 화면 로그인 칸이 어느 쪽으로 갈지 알 수 없다.
+        if find_rep(conn, username):
+            summary["skt_accounts"]["skipped"] += 1
+            summary["skt_accounts"]["errors"].append(f"SKT 계정 {username}: 영업사원 고유ID와 겹쳐서 건너뜀")
+            continue
+        existing = conn.execute("SELECT * FROM admins WHERE UPPER(username) = ?", (username,)).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE admins SET role = ?, name = COALESCE(?, name) WHERE id = ?",
+                (role, name or None, existing["id"]),
+            )
+            if not existing["password_hash"]:
+                conn.execute(
+                    "UPDATE admins SET password_hash = ?, must_change_password = 1 WHERE id = ?",
+                    (generate_password_hash(username), existing["id"]),
+                )
+            summary["skt_accounts"]["updated"] += 1
+        else:
+            conn.execute(
+                """
+                INSERT INTO admins (id, username, password_hash, created_at, role, name, must_change_password)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                """,
+                (new_id(), username, generate_password_hash(username), now_iso, role, name or None),
+            )
+            summary["skt_accounts"]["created"] += 1
 
     seen_codes: set[str] = set()
     for i, row in enumerate(buckets.get("stores", []), start=2):

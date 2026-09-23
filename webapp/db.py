@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS admins (
     created_at TEXT NOT NULL,
     dealer_id TEXT,
     role TEXT NOT NULL DEFAULT 'super',
-    must_change_password INTEGER NOT NULL DEFAULT 0
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -429,6 +430,9 @@ def migrate_schema(conn) -> None:
         conn.execute("ALTER TABLE admins ADD COLUMN dealer_id TEXT")
     if admin_cols and "role" not in admin_cols:
         conn.execute("ALTER TABLE admins ADD COLUMN role TEXT")
+    if admin_cols and "name" not in admin_cols:
+        # SKT 계정의 실제 이름(예: RS팀 직원 일괄 등록). 없으면 화면에서 username으로 대신한다.
+        conn.execute("ALTER TABLE admins ADD COLUMN name TEXT")
     conn.execute("UPDATE admins SET role = 'super' WHERE role IS NULL OR role = ''")
 
     # 최초 1회만 기본 관리자를 만든다. 이미 있으면 비밀번호를 덮어쓰지 않는다.

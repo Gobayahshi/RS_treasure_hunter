@@ -146,6 +146,10 @@
           영업사원 시트는 사내 <strong>Sales_info</strong> 형식(파트너코드 · 직원명 · LOGIN-ID · 전화번호뒤4자리)도
           그대로 받습니다. 전화번호는 뒤 4자리만 저장합니다.
         </p>
+        <p class="muted small">
+          <strong>구분/권한</strong> 열(이름 · ID · PW · 구분/권한)이 있는 시트는 SKT 자체 직원 계정으로 등록됩니다.
+          "admin"이면 총괄, 그 외(예: "SKT")면 조회 전용 직원이 됩니다. 초기 비밀번호는 항상 ID와 같습니다.
+        </p>
         <button id="templateBtn" class="btn-secondary">양식 다운로드</button>
         <input id="excelFiles" type="file" accept=".xlsx" multiple />
         <label class="check-line">
