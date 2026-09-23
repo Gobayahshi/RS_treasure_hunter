@@ -18,12 +18,26 @@ sys.path.insert(0, WEBAPP_DIR)
 @pytest.fixture(scope="session")
 def server():
     tmp_dir = tempfile.mkdtemp(prefix="rs-treasure-test-")
-    os.environ["DB_PATH"] = os.path.join(tmp_dir, "test.db")
+    tmp_db = os.path.join(tmp_dir, "test.db")
+    os.environ["DB_PATH"] = tmp_db
     os.environ["ADMIN_USERNAME"] = "admin"
     os.environ["ADMIN_INITIAL_PASSWORD"] = "admin"
     os.chdir(WEBAPP_DIR)
     import app as server_module
 
+    # db.py 의 DB_PATH 는 모듈을 맨 처음 import 할 때 딱 한 번만 계산된다. 어떤 테스트 파일이든
+    # 최상단(모듈 레벨)에서 app/db 를 먼저 import 해버리면 위에서 정한 임시 경로가 씹히고,
+    # 그 뒤로는 이 프로세스에서 도는 테스트 전부가 실제 로컬 운영 DB(webapp/rs_treasure.db)에
+    # 쓰게 된다 — 조용히 실패해서 알아차리기 어렵다. 여기서 바로 확인해 크게 터뜨린다.
+    # (실제로 2026-09-23에 test_password.py 의 최상단 `import app` 때문에 한동안 이렇게 샜다.)
+    import db as db_module
+
+    assert os.path.abspath(db_module.DB_PATH) == os.path.abspath(tmp_db), (
+        "테스트가 임시 DB가 아니라 실제 DB_PATH를 보고 있습니다: "
+        f"{db_module.DB_PATH!r}. 어떤 tests/*.py 파일이 모듈 최상단에서 "
+        "'import app' / 'from db import ...' 를 하고 있는지 확인하세요 "
+        "(server/client/fixtures 같은 fixture 안에서만 import 해야 합니다)."
+    )
     return server_module
 
 

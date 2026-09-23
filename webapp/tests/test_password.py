@@ -3,8 +3,6 @@
 import uuid
 from datetime import datetime
 
-import app as server_module  # noqa: F401  (conftest 가 먼저 DB_PATH 를 잡는다)
-
 
 def rep_auth(token):
     return {"X-Rep-Token": token}
@@ -38,9 +36,9 @@ def make_rep(server, phone="010-1234-5678", password=None, dealer_id=None):
                 dealer_id,
                 "홍길동",
                 code,
-                server_module.hash_password(password or code),
+                server.hash_password(password or code),
                 datetime.utcnow().isoformat(),
-                server_module.normalize_phone_last4(phone),
+                server.normalize_phone_last4(phone),
             ),
         )
     return {"id": rep_id, "code": code, "phone": phone, "password": password or code}
