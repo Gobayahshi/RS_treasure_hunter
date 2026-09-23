@@ -590,67 +590,6 @@ function formatVisitTime(iso) {
   return date.toLocaleString("ko-KR", { timeZone: "Asia/Seoul", hour12: false });
 }
 
-async function loadReviewQueue() {
-  const container = $("reviewList");
-  if (!container) return;
-  const data = await api("/admin/visit-sessions?status=pending_review");
-  const items = data.items || [];
-  container.innerHTML = "";
-  if (!items.length) {
-    container.innerHTML = '<p class="empty">검토 대기 중인 방문이 없습니다.</p>';
-    return;
-  }
-  for (const s of items) {
-    const el = document.createElement("div");
-    el.className = "item-card";
-    const reasons = (s.reasons || []).map((r) => escHtml(r.label)).join(", ") || "사유 없음";
-    const distance =
-      s.first_sample_distance_m === null || s.first_sample_distance_m === undefined
-        ? "거리 정보 없음"
-        : `매장에서 ${s.first_sample_distance_m}m`;
-    el.innerHTML = `
-      <div class="store-name">${escHtml(s.store_name || "")} <span class="muted small">${escHtml(s.address || "")}</span></div>
-      <div class="muted small">
-        ${escHtml(s.rep_name || "")} (${escHtml(s.employee_code || "")}) · ${escHtml(s.dealer_name || "소속 없음")}
-      </div>
-      <div class="muted small">
-        ${escHtml(formatVisitTime(s.ended_at || s.started_at))} · 점수 ${escHtml(s.confidence_score ?? "-")}점 ·
-        ${escHtml(distance)} · 위치 ${escHtml(s.sample_count ?? 0)}건
-      </div>
-      <div class="muted small">사유: ${reasons}</div>
-      ${
-        adminCanEdit
-          ? `<div class="row planted-actions">
-               <button class="btn-secondary compact" data-approve>승인 (포인트 지급)</button>
-               <button class="btn-secondary compact" data-reject>반려</button>
-             </div>`
-          : ""
-      }
-    `;
-    const decide = async (decision) => {
-      const label = decision === "approve" ? "승인" : "반려";
-      if (!confirm(`이 방문을 ${label}할까요?`)) return;
-      try {
-        const res = await api(`/admin/visit-sessions/${s.id}/review`, {
-          method: "POST",
-          body: JSON.stringify({ decision }),
-        });
-        const points = res.point_ledger_entry ? `${res.point_ledger_entry.points}P 지급` : "포인트 지급 없음";
-        const detail = decision === "approve" ? res.note || points : "포인트 없음";
-        $("reviewMessage").textContent = `${label} 완료 · ${detail}`;
-        await Promise.all([loadReviewQueue(), loadLeaderboard()]);
-      } catch (err) {
-        $("reviewMessage").textContent = String(err.message || err);
-      }
-    };
-    const approveBtn = el.querySelector("[data-approve]");
-    const rejectBtn = el.querySelector("[data-reject]");
-    if (approveBtn) approveBtn.addEventListener("click", () => decide("approve"));
-    if (rejectBtn) rejectBtn.addEventListener("click", () => decide("reject"));
-    container.appendChild(el);
-  }
-}
-
 async function loadSettings() {
   const data = await api("/admin/settings");
   $("pointsNormal").value = data.points_normal;
@@ -777,8 +716,13 @@ async function handleAddRep() {
   const code = $("newRepCode").value.trim();
   const dealerCode = $("newRepDealerCode").value.trim();
   const role = $("newRepRole").value;
+  const phone = $("newRepPhone").value.trim();
   if (!name || !code) {
     msg.textContent = "이름과 고유ID를 입력해주세요.";
+    return;
+  }
+  if (phone && !/^\d{4}$/.test(phone)) {
+    msg.textContent = "전화번호 뒤 4자리는 숫자 4자리로 입력해주세요.";
     return;
   }
   const btn = $("addRepBtn");
@@ -786,11 +730,18 @@ async function handleAddRep() {
   try {
     const rep = await api("/reps", {
       method: "POST",
-      body: JSON.stringify({ name, employee_code: code, dealer_code: dealerCode, dealer_role: role }),
+      body: JSON.stringify({
+        name,
+        employee_code: code,
+        dealer_code: dealerCode,
+        dealer_role: role,
+        phone_last4: phone,
+      }),
     });
     $("newRepName").value = "";
     $("newRepCode").value = "";
     $("newRepDealerCode").value = "";
+    $("newRepPhone").value = "";
     msg.textContent = `'${rep.name}'(${rep.employee_code}) 계정을 저장했습니다. 초기 비밀번호는 고유ID와 같습니다.`;
     await loadReps();
   } catch (err) {
@@ -845,6 +796,13 @@ function renderReps() {
             <option value="manager"${role === "manager" ? " selected" : ""}>대리점 관리자</option>
           </select>
         </div>
+        <input
+          data-edit-phone
+          type="tel"
+          inputmode="numeric"
+          maxlength="4"
+          placeholder="${r.has_phone ? `전화번호 뒤 4자리 (현재 ${escHtml(r.phone_masked)}, 비우면 그대로)` : "전화번호 뒤 4자리 (선택, 비밀번호 재설정용)"}"
+        />
         <label class="check-line">
           <input type="checkbox" data-edit-reset-pw />
           비밀번호를 고유ID로 초기화 (다음 로그인 때 변경 강제)
@@ -861,6 +819,14 @@ function renderReps() {
           dealer_code: el.querySelector("[data-edit-dealer]").value.trim(),
           dealer_role: el.querySelector("[data-edit-role]").value,
         };
+        const phone = el.querySelector("[data-edit-phone]").value.trim();
+        if (phone) {
+          if (!/^\d{4}$/.test(phone)) {
+            $("repMessage").textContent = "전화번호 뒤 4자리는 숫자 4자리로 입력해주세요.";
+            return;
+          }
+          payload.phone_last4 = phone;
+        }
         if (el.querySelector("[data-edit-reset-pw]").checked) payload.reset_password = true;
         try {
           const updated = await api(`/reps/${r.id}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -962,30 +928,6 @@ function renderReps() {
   }
 }
 
-async function handleCreateTestAccounts() {
-  const msg = $("testAccountMessage");
-  msg.textContent = "만드는 중...";
-  try {
-    const data = await api("/admin/test-accounts", { method: "POST" });
-    msg.textContent = `대리점 ${data.dealer_count}곳 · 새로 만든 계정 ${data.created}개 (이미 있던 계정 ${data.already}개). ${data.note}`;
-    await loadReps();
-  } catch (err) {
-    msg.textContent = String(err.message || err);
-  }
-}
-
-async function handleDeleteTestAccounts() {
-  const msg = $("testAccountMessage");
-  if (!confirm("테스트 계정을 모두 지웁니다. 그 계정의 방문·포인트 기록도 함께 사라집니다. 계속할까요?")) return;
-  msg.textContent = "지우는 중...";
-  try {
-    const data = await api("/admin/test-accounts", { method: "DELETE" });
-    msg.textContent = `테스트 계정 ${data.removed}개를 삭제했습니다.`;
-    await loadReps();
-  } catch (err) {
-    msg.textContent = String(err.message || err);
-  }
-}
 
 async function loadAccounts() {
   const container = $("accountList");
@@ -1134,7 +1076,6 @@ async function reloadAll() {
     loadGeocodeStatus(),
     loadSettings(),
     loadPlanted(),
-    loadReviewQueue(),
     loadAccounts(),
     $("inventoryMap") ? loadInventoryMap() : Promise.resolve(),
   ]);
@@ -1334,13 +1275,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("spawnBtn").addEventListener("click", handleSpawn);
   $("geocodeBtn").addEventListener("click", handleGeocode);
   $("refreshGeocodeStatusBtn").addEventListener("click", loadGeocodeStatus);
-  if ($("refreshReviewBtn")) $("refreshReviewBtn").addEventListener("click", loadReviewQueue);
   if ($("refreshAccountsBtn")) $("refreshAccountsBtn").addEventListener("click", loadAccounts);
   if ($("createAccountBtn")) $("createAccountBtn").addEventListener("click", handleCreateAccount);
   if ($("repSearch")) $("repSearch").addEventListener("input", renderReps);
   if ($("addRepBtn")) $("addRepBtn").addEventListener("click", handleAddRep);
-  if ($("createTestAccountsBtn")) $("createTestAccountsBtn").addEventListener("click", handleCreateTestAccounts);
-  if ($("deleteTestAccountsBtn")) $("deleteTestAccountsBtn").addEventListener("click", handleDeleteTestAccounts);
   if ($("storeSearch")) $("storeSearch").addEventListener("input", handleStoreSearchInput);
   $("importBtn").addEventListener("click", handleImport);
   $("inventoryImportBtn").addEventListener("click", handleInventoryImport);

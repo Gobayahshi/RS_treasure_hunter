@@ -609,7 +609,46 @@ a.btn-secondary {
 }
 
 body.admin-page main {
-  max-width: 720px;
+  max-width: 920px;
+}
+
+/* 관리자 화면 전용: 탭 바를 또렷하게, 섹션 사이 구분을 분명하게 (2026-09-24) */
+body.admin-page .admin-tabs {
+  position: sticky;
+  top: 53px; /* .topbar 높이만큼 내려서 겹치지 않게 */
+  z-index: 9;
+  background: #f8fafc;
+  margin: 0 -16px 8px;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+body.admin-page #admin-app > section.screen {
+  padding: 22px 0 26px;
+  border-bottom: 1px solid #e9edf3;
+}
+
+body.admin-page #admin-app > section.screen:last-of-type {
+  border-bottom: none;
+}
+
+body.admin-page #admin-app > section.screen > h2,
+body.admin-page #admin-app > section.screen > .between > h2 {
+  font-size: 17px;
+  margin: 0 0 14px;
+  padding-left: 12px;
+  border-left: 4px solid #2563eb;
+}
+
+body.admin-page #admin-app > section.screen > .between {
+  margin-top: 0;
+}
+
+body.admin-page #viewOnlyNotice {
+  background: #eff6ff;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  box-shadow: none;
 }
 
 html:has(body.inventory-assist),

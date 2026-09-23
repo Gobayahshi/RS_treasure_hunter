@@ -1492,6 +1492,7 @@ def create_rep():
     employee_code = normalize_employee_code(body.get("employee_code"))
     dealer_code = (body.get("dealer_code") or "").strip()
     dealer_role = (body.get("dealer_role") or "").strip()
+    phone4 = normalize_phone_last4(body.get("phone_last4")) if body.get("phone_last4") else ""
     if not name or not employee_code:
         return jsonify({"error": "BAD_INPUT", "message": "이름과 고유ID를 입력해주세요."}), 400
     if dealer_role and dealer_role not in DEALER_ROLES:
@@ -1517,6 +1518,8 @@ def create_rep():
             )
             if dealer_role:
                 conn.execute("UPDATE reps SET dealer_role = ? WHERE id = ?", (dealer_role, existing["id"]))
+            if phone4:
+                conn.execute("UPDATE reps SET phone_last4 = ? WHERE id = ?", (phone4, existing["id"]))
             # 비밀번호가 비어 있으면 초기값(고유ID)으로 채운다. 이미 바꾼 비번은 유지.
             if not existing["password_hash"]:
                 conn.execute(
@@ -1530,8 +1533,8 @@ def create_rep():
                 """
                 INSERT INTO reps (
                     id, dealer_id, name, employee_code, password_hash, device_id, created_at, dealer_role,
-                    must_change_password
-                ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1)
+                    phone_last4, must_change_password
+                ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 1)
                 """,
                 (
                     rep_id,
@@ -1541,6 +1544,7 @@ def create_rep():
                     hash_password(default_password_for(employee_code)),
                     now_iso(),
                     dealer_role or "staff",
+                    phone4 or None,
                 ),
             )
             rep = _rep_with_dealer(conn, rep_id)
@@ -1595,6 +1599,12 @@ def update_rep(rep_id):
             if dealer_role not in DEALER_ROLES:
                 return jsonify({"error": "BAD_ROLE", "message": "manager 또는 staff 여야 합니다."}), 400
             updates["dealer_role"] = dealer_role
+
+        if body.get("phone_last4"):
+            phone4 = normalize_phone_last4(body.get("phone_last4"))
+            if not phone4:
+                return jsonify({"error": "BAD_INPUT", "message": "전화번호 뒤 4자리를 숫자로 입력해주세요."}), 400
+            updates["phone_last4"] = phone4
 
         if body.get("reset_password"):
             # 비밀번호를 고유ID로 되돌리고 다음 로그인 때 반드시 바꾸게 한다.

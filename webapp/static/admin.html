@@ -99,18 +99,6 @@
     </section>
 
     <section class="screen" data-tab="ops">
-      <div class="between">
-        <h2>검토 대기 방문</h2>
-        <button id="refreshReviewBtn" class="btn-secondary compact">새로고침</button>
-      </div>
-      <p class="muted small">
-        GPS 신뢰점수가 낮아 자동 승인되지 않은 방문입니다. 승인하면 자동 승인과 같은 기준으로 포인트가 적립됩니다.
-      </p>
-      <p id="reviewMessage" class="muted small"></p>
-      <div id="reviewList" class="list"></div>
-    </section>
-
-    <section class="screen" data-tab="ops">
       <h2>기본 포인트 · 통계</h2>
       <div class="card">
         <p class="muted small">엑셀 스폰 보물(일반/레어)의 기본 포인트입니다. 위에서 직접 심은 보물은 각자 지정한 포인트를 씁니다.</p>
@@ -189,15 +177,6 @@
 
     <section class="screen" data-tab="account">
       <h2>영업사원</h2>
-      <div class="card" data-super-only>
-        <p class="muted small">
-          시연·교육용 테스트 계정입니다. 대리점마다 <code>대리점코드TEST_1</code>, <code>대리점코드TEST_2</code> 2개를 만듭니다.
-          비밀번호는 아이디와 같고, 전화번호 뒤 4자리는 0000 입니다.
-        </p>
-        <button id="createTestAccountsBtn" class="btn-secondary">테스트 계정 만들기</button>
-        <button id="deleteTestAccountsBtn" class="btn-secondary">테스트 계정 모두 삭제</button>
-        <p id="testAccountMessage" class="muted small"></p>
-      </div>
 
       <div class="card" data-super-only>
         <h3 class="section-title" style="margin-top:0">사용자 직접 추가</h3>
@@ -216,6 +195,7 @@
             <option value="manager">대리점 관리자</option>
           </select>
         </div>
+        <input id="newRepPhone" type="tel" inputmode="numeric" maxlength="4" placeholder="전화번호 뒤 4자리 (선택, 비밀번호 재설정용)" autocomplete="off" />
         <datalist id="dealerCodeList"></datalist>
         <button id="addRepBtn" class="btn-primary">추가 / 덮어쓰기</button>
       </div>

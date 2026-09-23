@@ -50,6 +50,36 @@ def test_super_can_add_rep_with_dealer_and_role(client, admin_token):
     assert login.status_code == 200
 
 
+def test_add_rep_with_phone_last4_enables_self_reset(client, admin_token):
+    code = f"PH{uuid.uuid4().hex[:6].upper()}"
+    res = client.post(
+        "/api/reps",
+        json={"name": "전화번호", "employee_code": code, "phone_last4": "010-1234-5678"},
+        headers=admin_auth(admin_token),
+    )
+    assert res.status_code == 201
+    body = res.get_json()
+    assert body["has_phone"] is True
+    assert body["phone_masked"] == "****-5678"  # 뒤 4자리만 저장, 전체 번호는 API로 내려가지 않음
+    assert "phone_last4" not in body
+
+    reset = client.post(
+        "/api/auth/reset-password",
+        json={"employee_code": code, "phone": "5678", "new_password": "newpw123"},
+    )
+    assert reset.status_code == 200
+
+
+def test_add_rep_without_phone_cannot_self_reset(client, admin_token):
+    code = f"NOPHONE{uuid.uuid4().hex[:5].upper()}"
+    client.post("/api/reps", json={"name": "번호없음", "employee_code": code}, headers=admin_auth(admin_token))
+    reset = client.post(
+        "/api/auth/reset-password",
+        json={"employee_code": code, "phone": "0000", "new_password": "newpw123"},
+    )
+    assert reset.status_code == 401
+
+
 def test_add_rep_without_dealer_leaves_unassigned(client, admin_token):
     code = f"NODEALER{uuid.uuid4().hex[:5].upper()}"
     res = client.post(
@@ -126,6 +156,33 @@ def test_edit_can_unassign_dealer(client, admin_token, fixtures):
     )
     assert res.status_code == 200
     assert not res.get_json()["dealer_id"]
+
+
+def test_edit_can_set_phone_last4(client, admin_token, fixtures):
+    res = client.patch(
+        f"/api/reps/{fixtures['rep_id']}",
+        json={"phone_last4": "010-9999-4321"},
+        headers=admin_auth(admin_token),
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["has_phone"] is True
+    assert body["phone_masked"] == "****-4321"
+
+    reset = client.post(
+        "/api/auth/reset-password",
+        json={"employee_code": fixtures["employee_code"], "phone": "4321", "new_password": "resetpw12"},
+    )
+    assert reset.status_code == 200
+
+
+def test_edit_rejects_bad_phone_last4(client, admin_token, fixtures):
+    res = client.patch(
+        f"/api/reps/{fixtures['rep_id']}",
+        json={"phone_last4": "ab"},
+        headers=admin_auth(admin_token),
+    )
+    assert res.status_code == 400
 
 
 def test_edit_rejects_duplicate_employee_code(client, admin_token, fixtures):
