@@ -673,6 +673,12 @@ body.inventory-assist .topbar {
   flex-wrap: wrap;
 }
 
+body.inventory-assist .topbar .brand-logo {
+  height: 32px;
+  width: auto;
+  flex: none;
+}
+
 #inventoryUploadBar {
   display: flex;
   align-items: center;
