@@ -34,8 +34,9 @@
 
     <nav id="adminTabs" class="chip-row admin-tabs">
       <button type="button" class="chip" data-tab-btn="ops">보물찾기 운영</button>
-      <button type="button" class="chip" data-tab-btn="stores">매장 마스터</button>
+      <button type="button" class="chip" data-tab-btn="stores">판매점 위치</button>
       <button type="button" class="chip" data-tab-btn="account">계정 · 공통</button>
+      <button type="button" class="chip" data-tab-btn="inventory-ops">재고지도 운영</button>
     </nav>
 
     <p id="viewOnlyNotice" class="card muted small hidden">
@@ -60,19 +61,6 @@
         <p id="accountMessage" class="muted small"></p>
       </div>
       <div id="accountList" class="list"></div>
-    </section>
-
-    <section class="screen" data-tab="account" data-super-only>
-      <h2>재고 엑셀</h2>
-      <div class="card">
-        <p class="muted small">
-          재고현황 엑셀은 대리점 계정으로
-          <a href="inventory">재고 화면</a>에서 올리세요. 올리면 그 대리점 이전 재고는 교체됩니다.
-        </p>
-        <input id="inventoryFile" type="file" accept=".xlsx" />
-        <button id="inventoryImportBtn" class="btn-primary">재고 엑셀 올리기</button>
-        <p id="inventoryImportMessage" class="muted small"></p>
-      </div>
     </section>
 
     <section class="screen" data-tab="ops" data-super-only>
@@ -169,13 +157,6 @@
     </section>
 
     <section class="screen" data-tab="account">
-      <div class="between" style="margin-top:0">
-        <h2>대리점</h2>
-      </div>
-      <div id="dealerList" class="list"></div>
-    </section>
-
-    <section class="screen" data-tab="account">
       <h2>영업사원</h2>
 
       <div class="card" data-super-only>
@@ -236,6 +217,13 @@
     <section class="screen" data-tab="ops">
       <h2>랭킹보드</h2>
       <div id="leaderboard" class="list"></div>
+    </section>
+
+    <section class="screen" data-tab="inventory-ops">
+      <h2>재고지도 운영</h2>
+      <div class="card">
+        <p class="muted small">준비 중입니다. 이 탭에 넣을 기능이 정해지면 추가하겠습니다.</p>
+      </div>
     </section>
 
   </div>

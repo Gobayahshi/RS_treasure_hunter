@@ -460,26 +460,6 @@ function handleInventoryNearest() {
   );
 }
 
-async function handleInventoryImport() {
-  const input = $("inventoryFile");
-  const msg = $("inventoryImportMessage");
-  if (!input.files.length) {
-    msg.textContent = "재고현황 xlsx 파일을 선택해주세요.";
-    return;
-  }
-  const form = new FormData();
-  form.append("file", input.files[0]);
-  msg.textContent = "재고 엑셀을 읽는 중...";
-  try {
-    const data = await api("/inventory/excel", { method: "POST", body: form });
-    const partner = (data.by_holder_type && data.by_holder_type.partner) || 0;
-    msg.textContent = `업로드 완료: ${data.dealer_name || ""} ${data.row_count}행 (판매점 ${partner}대, 기준일 ${data.as_of_date || "-"}). 지도는 재고 화면에서 확인하세요.`;
-    if ($("inventoryMap")) await loadInventoryMap();
-  } catch (err) {
-    msg.textContent = String(err.message || err);
-  }
-}
-
 function handlePlantUseMyLocation() {
   const msg = $("plantMessage");
   if (!navigator.geolocation) {
@@ -690,18 +670,6 @@ async function handleChangeAdminPassword() {
 
 async function loadDealers() {
   allDealers = await api("/dealers");
-  const container = $("dealerList");
-  container.innerHTML = "";
-  if (allDealers.length === 0) {
-    container.innerHTML = '<p class="empty">등록된 대리점이 없습니다. 엑셀을 올려주세요.</p>';
-  } else {
-    for (const d of allDealers) {
-      const el = document.createElement("div");
-      el.className = "item-card";
-      el.innerHTML = `<div class="store-name">${escHtml(d.name)}</div><div class="muted small">대리점ID: ${escHtml(d.dealer_code)}</div>`;
-      container.appendChild(el);
-    }
-  }
   const datalist = $("dealerCodeList");
   if (datalist) {
     datalist.innerHTML = allDealers
@@ -1281,7 +1249,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("addRepBtn")) $("addRepBtn").addEventListener("click", handleAddRep);
   if ($("storeSearch")) $("storeSearch").addEventListener("input", handleStoreSearchInput);
   $("importBtn").addEventListener("click", handleImport);
-  $("inventoryImportBtn").addEventListener("click", handleInventoryImport);
   if ($("inventoryMapBtn")) $("inventoryMapBtn").addEventListener("click", () => loadInventoryMap());
   if ($("inventoryNearestBtn")) $("inventoryNearestBtn").addEventListener("click", handleInventoryNearest);
   if ($("inventoryRegionChips")) $("inventoryRegionChips").addEventListener("click", handleInventoryRegionClick);
