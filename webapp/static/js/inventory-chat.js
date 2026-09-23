@@ -11,12 +11,14 @@ let lastChatMapData = null;
 let lastChatOrigin = null;
 let storeLabelsOn = null;
 let pendingQuestion = "";
-let areaMode = false;
+let areaShape = null; // null | "rect" | "circle" — 지금 켜져 있거나 마지막으로 그린 모양
 let areaDrawing = false;
 let areaStart = null;
 let areaLast = null;
 let areaRect = null;
+let areaCircleLayer = null;
 let areaBounds = null;
+let areaCircle = null;
 let areaBoundOnce = false;
 let inventoryUser = {
   username: "",
@@ -471,20 +473,21 @@ function ensureChatMap() {
   return chatMap;
 }
 
-function setAreaMode(on) {
-  areaMode = !!on;
-  const btn = $("areaSelectBtn");
+function setAreaMode(on, shape = "rect") {
+  areaShape = on ? shape : null;
+  const rectBtn = $("areaSelectBtn");
+  const circleBtn = $("areaCircleBtn");
   const pane = document.querySelector(".inventory-map-pane");
-  if (!btn || !chatMap) return;
-  if (areaMode) {
-    btn.classList.add("active");
-    btn.textContent = "드래그해서 영역을 그리세요";
+  if (!rectBtn || !circleBtn || !chatMap) return;
+  rectBtn.classList.toggle("active", areaShape === "rect");
+  circleBtn.classList.toggle("active", areaShape === "circle");
+  rectBtn.textContent = areaShape === "rect" ? "드래그해서 영역을 그리세요" : "영역 선택";
+  circleBtn.textContent = areaShape === "circle" ? "드래그해서 반경을 그리세요" : "원형 선택";
+  if (areaShape) {
     pane.classList.add("is-drawing");
     chatMap.dragging.disable();
     chatMap.boxZoom.disable();
   } else {
-    btn.classList.remove("active");
-    btn.textContent = "영역 선택";
     pane.classList.remove("is-drawing");
     chatMap.dragging.enable();
     chatMap.boxZoom.enable();
@@ -495,9 +498,14 @@ function clearArea() {
   areaDrawing = false;
   areaStart = null;
   areaBounds = null;
+  areaCircle = null;
   if (areaRect && chatMap) {
     chatMap.removeLayer(areaRect);
     areaRect = null;
+  }
+  if (areaCircleLayer && chatMap) {
+    chatMap.removeLayer(areaCircleLayer);
+    areaCircleLayer = null;
   }
   const clearBtn = $("areaClearBtn");
   if (clearBtn) clearBtn.classList.add("hidden");
@@ -510,28 +518,67 @@ function bindAreaDraw(map) {
   if (areaBoundOnce) return;
   areaBoundOnce = true;
   map.on("mousedown", (e) => {
-    if (!areaMode) return;
+    if (!areaShape) return;
     L.DomEvent.preventDefault(e.originalEvent);
     areaDrawing = true;
     areaStart = e.latlng;
     areaLast = e.latlng;
-    if (areaRect) map.removeLayer(areaRect);
-    areaRect = L.rectangle(L.latLngBounds(areaStart, areaStart), {
-      color: "#7c3aed",
-      weight: 2,
-      fillColor: "#8b5cf6",
-      fillOpacity: 0.12,
-    }).addTo(map);
+    // 모양을 바꿔 다시 그릴 수도 있으니 이전 도형은 종류에 상관없이 지운다.
+    if (areaRect) {
+      map.removeLayer(areaRect);
+      areaRect = null;
+    }
+    if (areaCircleLayer) {
+      map.removeLayer(areaCircleLayer);
+      areaCircleLayer = null;
+    }
+    if (areaShape === "circle") {
+      areaCircleLayer = L.circle(areaStart, {
+        radius: 1,
+        color: "#7c3aed",
+        weight: 2,
+        fillColor: "#8b5cf6",
+        fillOpacity: 0.12,
+      }).addTo(map);
+    } else {
+      areaRect = L.rectangle(L.latLngBounds(areaStart, areaStart), {
+        color: "#7c3aed",
+        weight: 2,
+        fillColor: "#8b5cf6",
+        fillOpacity: 0.12,
+      }).addTo(map);
+    }
   });
   map.on("mousemove", (e) => {
-    if (!areaDrawing || !areaRect || !areaStart) return;
+    if (!areaDrawing || !areaStart) return;
     areaLast = e.latlng;
-    areaRect.setBounds(L.latLngBounds(areaStart, e.latlng));
+    if (areaShape === "circle") {
+      if (areaCircleLayer) areaCircleLayer.setRadius(areaStart.distanceTo(e.latlng));
+    } else if (areaRect) {
+      areaRect.setBounds(L.latLngBounds(areaStart, e.latlng));
+    }
   });
   const finish = () => {
-    if (!areaDrawing || !areaRect || !areaStart) return;
+    if (!areaDrawing || !areaStart) return;
     areaDrawing = false;
     const end = areaLast || areaStart;
+    if (areaShape === "circle") {
+      if (!areaCircleLayer) return;
+      const radiusMeters = areaStart.distanceTo(end);
+      areaCircleLayer.setRadius(radiusMeters);
+      if (radiusMeters < 30) {
+        setAreaMode(false);
+        return;
+      }
+      areaCircle = { lat: areaStart.lat, lng: areaStart.lng, radius_km: radiusMeters / 1000 };
+      areaBounds = null;
+      setAreaMode(false);
+      const clearBtn = $("areaClearBtn");
+      if (clearBtn) clearBtn.classList.remove("hidden");
+      applyAreaCircle(areaCircle);
+      return;
+    }
+    if (!areaRect) return;
     areaRect.setBounds(L.latLngBounds(areaStart, end));
     const b = areaRect.getBounds();
     if (b.getSouth() === b.getNorth() || b.getWest() === b.getEast()) {
@@ -544,6 +591,7 @@ function bindAreaDraw(map) {
       north: b.getNorth(),
       east: b.getEast(),
     };
+    areaCircle = null;
     setAreaMode(false);
     const clearBtn = $("areaClearBtn");
     if (clearBtn) clearBtn.classList.remove("hidden");
@@ -601,6 +649,21 @@ async function applyAreaBounds(bbox) {
     params.set("west", String(bbox.west));
     params.set("north", String(bbox.north));
     params.set("east", String(bbox.east));
+    const data = await api(`/inventory/map?${params}`);
+    applyMapMeta(data);
+    renderChatMap(data, null, true);
+    renderAreaTable(data);
+  } catch (err) {
+    addBotError(err);
+  }
+}
+
+async function applyAreaCircle(circle) {
+  try {
+    const params = mapQueryParams();
+    params.set("circle_lat", String(circle.lat));
+    params.set("circle_lng", String(circle.lng));
+    params.set("circle_radius_km", String(circle.radius_km));
     const data = await api(`/inventory/map?${params}`);
     applyMapMeta(data);
     renderChatMap(data, null, true);
@@ -1677,10 +1740,17 @@ document.addEventListener("DOMContentLoaded", () => {
     btn.addEventListener("click", () => submitChat(btn.getAttribute("data-q")));
   });
   $("areaSelectBtn").addEventListener("click", () => {
-    if (areaMode) setAreaMode(false);
+    if (areaShape === "rect") setAreaMode(false);
     else {
       ensureChatMap();
-      setAreaMode(true);
+      setAreaMode(true, "rect");
+    }
+  });
+  $("areaCircleBtn").addEventListener("click", () => {
+    if (areaShape === "circle") setAreaMode(false);
+    else {
+      ensureChatMap();
+      setAreaMode(true, "circle");
     }
   });
   $("areaClearBtn").addEventListener("click", clearArea);

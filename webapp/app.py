@@ -2589,6 +2589,16 @@ def inventory_map():
             }
         except ValueError:
             return jsonify({"error": "south, west, north, east는 숫자여야 합니다."}), 400
+    circle = None
+    if all(request.args.get(k) not in (None, "") for k in ("circle_lat", "circle_lng", "circle_radius_km")):
+        try:
+            circle = {
+                "lat": float(request.args.get("circle_lat")),
+                "lng": float(request.args.get("circle_lng")),
+                "radius_km": float(request.args.get("circle_radius_km")),
+            }
+        except ValueError:
+            return jsonify({"error": "circle_lat, circle_lng, circle_radius_km은 숫자여야 합니다."}), 400
     with db_session() as conn:
         if not dealer_id and dealer_code:
             dealer = conn.execute(
@@ -2605,19 +2615,21 @@ def inventory_map():
             keyword=keyword,
             dealer_id=dealer_id or None,
             bbox=bbox,
+            circle=circle,
             aged_only=aged_only,
             radius_km=radius_km,
             product_short=product_shorts,
             model_name=model_names,
             pin_color=pin_color,
         )
-        if bbox:
+        if bbox or circle:
             data["area_model_totals"] = inventory_model_breakdown(
                 conn,
                 dealer_id=dealer_id or None,
                 region=region,
                 keyword=keyword,
                 bbox=bbox,
+                circle=circle,
                 limit=80,
             )
         return jsonify(data)

@@ -110,6 +110,36 @@ def test_map_points_join_matches_store_master(server, fixtures):
         assert empty["total_qty"] == 0
 
 
+def test_map_points_circle_filter(server, fixtures):
+    """원형 영역 선택: 반경 안이면 남고, 밖이면 빠진다 (매장은 37.5, 127.0에 있음)."""
+    from db import db_session
+
+    code = fixtures["store_code"]
+    data = build_inventory_xlsx(
+        [[code, "테스트판매점", "갤럭시 Z플립7", "SM-F971", "1,200,000", 6, "SN1", "테스트대리점"]]
+    )
+    parsed = parse_inventory_file("재고현황.xlsx", data)
+    with db_session() as conn:
+        dealer = dict(
+            conn.execute("SELECT * FROM dealers WHERE id = ?", (fixtures["dealer_id"],)).fetchone()
+        )
+        replace_inventory(conn, parsed, "2026-09-16T00:00:00", lambda: os.urandom(8).hex(), dealer)
+
+        inside = inventory_map_points(
+            conn, "SM-F971", dealer_id=fixtures["dealer_id"],
+            circle={"lat": fixtures["lat"], "lng": fixtures["lng"], "radius_km": 1},
+        )
+        assert len(inside["points"]) == 1
+        assert inside["circle"] == {"lat": fixtures["lat"], "lng": fixtures["lng"], "radius_km": 1}
+
+        outside = inventory_map_points(
+            conn, "SM-F971", dealer_id=fixtures["dealer_id"],
+            circle={"lat": fixtures["lat"] + 1, "lng": fixtures["lng"], "radius_km": 1},
+        )
+        assert outside["points"] == []
+        assert outside["unmapped"] == []  # 원 밖으로 걸러졌을 뿐 미매핑은 아니다
+
+
 def upload_sample(fixtures):
     """판매점 1곳에 SM-F971 2대(1대는 45일 보유)를 올린다."""
     from db import db_session
