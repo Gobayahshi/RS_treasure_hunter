@@ -19,7 +19,11 @@ webapp/*.log
 Sales_info.xlsx
 RS팀 대리점 리스트.xlsx
 2607_판매점 리스트_양식.xlsx
+2609_RS팀 직원 리스트.xlsx
 영업정책/
+# 실제 아이디·비밀번호가 든 파일은 이름이 달라져도 걸러지도록 패턴으로도 막는다.
+*직원 리스트*.xlsx
+*비밀번호*.xlsx
 
 # 시연용
 webapp/static/inventory-preview.html

@@ -64,15 +64,19 @@ webapp/
 - 서버 데코레이터: `require_admin`(총괄) · `require_skt`(총괄+직원, 조회) · `require_rep`(영업사원 본인) · `require_inventory_user` · `require_inventory_uploader`
 - 세션: SKT는 `admin_sessions` + 헤더 `X-Admin-Token`. 사원은 `rep_sessions` + `X-Rep-Token` (재고 화면은 `X-Admin-Token` 헤더로 보내도 사원 토큰을 인정한다).
 - **요청 본문의 `rep_id` 같은 신원 값은 믿지 않는다.** 항상 토큰의 주인을 쓴다.
-- 소속 대리점이 없는 사원은 재고 화면을 쓸 수 없다 (볼 범위가 없으므로).
+- 소속 대리점이 없는 사원의 토큰은 재고 화면에서 401이 아니라 **403 `NO_DEALER`** 를 받는다. 유효한 로그인이지만 이 화면만 못 쓴다는 뜻이라, 클라이언트는 이 경우 토큰을 지우지 않는다 (보물찾기 세션이 함께 죽지 않게).
+- **한 번 로그인하면 세 화면(`/`, `/admin`, `/inventory`) 모두 통과된다** (2026-09-23). 셋 다 같은 origin이라 localStorage를 공유하는 점을 이용했다: 사원은 `rs_rep_token`, SKT는 `rs_admin_token`이라는 같은 키를 세 화면이 그대로 쓴다.
+  - `/`(app.js)·`/admin`(admin.js)은 원래 자기 키만 읽고 쓴다. `/inventory`(inventory-chat.js)만 두 키를 다 확인해서(`getStoredTokens()`) 로그인 화면 없이 바로 들어간다. 로그인 성공 시 `role`을 보고 어느 키에 저장할지 정한다(`dealer`→`rs_rep_token`, 그 외→`rs_admin_token`).
+  - 재고 화면에서 로그아웃하면 두 키를 다 지운다 — 같은 세션이므로 세 화면 모두 로그아웃된다. 반대로 `/`나 `/admin`에서 로그아웃하면 자기 키만 지운다(원래 그 화면이 다른 키를 쓸 일이 없다).
+  - 새 화면을 추가할 때 로그인을 새로 만들지 말고 이 두 키 중 맞는 쪽을 그대로 읽는다. 이것도 계정 트랙 범위다.
 
 #### 계정·로그인은 한 대화창에서 총괄한다 (2026-09-22 결정)
 4개 프로젝트가 **로그인 ID 하나**를 공유하므로, 계정·역할·권한 변경은 전담 대화창(이하 "계정 트랙") 한 곳에서만 한다.
 
 - **다른 대화창이 하지 않을 것:** 새 역할 추가, 새 로그인 화면·경로 추가, 새 세션 테이블 추가, 데코레이터 규칙 변경, 로그인 ID 체계 변경. 필요하면 계정 트랙에 요청하고, 자기 프로젝트 섹션의 "다음 할 일"에 적어 둔다.
 - **다른 대화창이 해도 되는 것:** 이미 있는 데코레이터(`require_admin` 등)를 새 API에 **붙이는 것**. 어떤 역할이 그 기능을 쓸지 애매하면 사용자에게 묻는다.
-- **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/*/login|logout|me|change-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions` 스키마, `/admin`의 계정·영업사원 화면, 재고 로그인 화면.
-- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py`, `test_password.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
+- **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/reps*`, `/api/*/login|logout|me|change-password|reset-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions` 스키마, `/admin`의 계정·영업사원 화면(추가/편집/삭제 포함), 재고 로그인 화면, 세 화면의 로그인 토큰 저장 방식(`rs_rep_token`/`rs_admin_token` 공유).
+- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py`, `test_password.py`, `test_rep_crud.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
 - **아직 정하지 않은 것 (계정 트랙에서 결정):** 판매점(P코드) 계정 발급 방식과 초기 비밀번호(프로젝트 3), 정책 챗봇 이용 범위(프로젝트 4).
 
 #### 비밀번호 (2026-09-22 결정)
@@ -94,6 +98,9 @@ webapp/
 - **테스트 계정:** `/admin` 영업사원 탭의 "테스트 계정 만들기" (총괄 전용, `POST /api/admin/test-accounts`). 직원이 있는 대리점마다 `대리점코드TEST_1`(관리자) · `대리점코드TEST_2`(직원) 2개.
   - 비밀번호 = 아이디, 전화번호 뒤 4자리 = `0000`, 비밀번호 변경을 강제하지 않는다(`is_test_account`). 시연·교육용이므로 **끝나면 "테스트 계정 모두 삭제"로 지운다.**
   - 아이디=비밀번호라 아는 사람은 누구나 그 대리점 재고를 보고 올릴 수 있다. 오래 두지 않는다.
+- **사용자 직접 추가/편집/삭제 (2026-09-23, 총괄 전용):** `/admin` 영업사원 탭 위쪽 "사용자 직접 추가" 카드 + 각 행의 편집/삭제 버튼.
+  - `POST /api/reps`(추가, 있는 고유ID면 덮어씀) · `PATCH /api/reps/<id>`(이름·고유ID·소속대리점·구분·`reset_password` 중 넘긴 것만 수정) · `DELETE /api/reps/<id>`(계정 + 방문·포인트·리워드 기록까지 삭제, 되돌릴 수 없음). 셋 다 `require_admin`(총괄만) — SKT 직원은 기존 `dealer-role` PATCH만 그대로 가능하다.
+  - 고유ID는 SKT 계정 아이디와 겹치면 409. 대리점은 `dealer_code`로 지정하고, 화면의 `<datalist id="dealerCodeList">`(전체 대리점 목록)로 입력을 돕는다. 테스트 계정도 같은 화면에서 만들고 지울 수 있다(일괄 버튼과 별개로 개별 편집도 된다).
 
 ### 반드시 지킬 구현 규칙
 - **시간:** DB에는 UTC로 저장하고, 날짜 경계·근무시간 같은 판단은 한국 시간으로 한다 (`confidence.to_kst`, `app.kst_now`, `app.kst_day_start_utc_iso`).
@@ -196,4 +203,6 @@ webapp/
 
 - 2026-09-16: 0단계 정리. KST 시간 버그, 검토 대기 처리, 영업사원 토큰 인증, 리워드 차감, 재고 조인 속도, 테스트 도입.
 - 2026-09-17: 1단계 계정 통합. SKT 직원 역할, 사원 고유ID로 재고 로그인, 임시 계정 삭제, `_partner_upload_filter` 복구.
+- 2026-09-22: Sales_info 기반 사원 등록, 전화번호 뒤 4자리 재설정, 고유ID 대소문자 무시, 테스트 계정.
+- 2026-09-23: 세 화면(`/`, `/admin`, `/inventory`) 로그인 토큰 공유(한 번 로그인하면 다 통과), 관리자용 영업사원 추가/편집/삭제 화면.
 - 로드맵 후보: 보물찾기 운영 준비(규칙 튜닝) → 두 기능 연결(체화 재고 → rare 보물) → 판매점 입력(프로젝트 3).

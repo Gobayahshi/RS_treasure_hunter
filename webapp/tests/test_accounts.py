@@ -111,11 +111,16 @@ def test_rep_without_dealer_cannot_use_inventory(client, server):
     assert res.status_code == 403
     assert res.get_json()["error"] == "NO_DEALER"
 
-    # 보물찾기 토큰으로 우회해도 재고 화면은 막힌다
+    # 보물찾기 토큰으로 우회해도 재고 화면은 막힌다. 로그인 자체는 유효하므로 401이 아니라
+    # 403 NO_DEALER 여야 한다 (보물찾기 세션은 계속 살아 있어야 하니 구분한다).
     token = client.post(
         "/api/auth/login", json={"employee_code": code, "password": "pw1234"}
     ).get_json()["token"]
-    assert client.get("/api/inventory/me", headers={"X-Rep-Token": token}).status_code == 401
+    blocked = client.get("/api/inventory/me", headers={"X-Rep-Token": token})
+    assert blocked.status_code == 403
+    assert blocked.get_json()["error"] == "NO_DEALER"
+    # 보물찾기 쪽은 여전히 정상 동작한다 (같은 토큰).
+    assert client.get("/api/auth/me", headers={"X-Rep-Token": token}).status_code == 200
 
 
 def test_rep_wrong_password_on_inventory(client, fixtures):

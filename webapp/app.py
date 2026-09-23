@@ -151,6 +151,7 @@ def public_rep(row) -> dict:
     phone4 = data.pop("phone_last4", None)
     data["has_phone"] = bool(normalize_phone_last4(phone4))
     data["phone_masked"] = mask_phone(phone4)
+    data["must_change_password"] = bool(data.get("must_change_password"))
     return data
 
 
@@ -403,13 +404,20 @@ def _is_super() -> bool:
 
 
 def _inventory_user_from_token(conn, token: str):
+    """토큰 주인을 재고 화면 사용자로 바꾼다. 유효한 토큰인데 대리점이 없으면 'no_dealer' 를 돌려준다.
+
+    (보물찾기·재고가 로그인을 공유하면서, "로그인은 유효하지만 이 화면은 못 쓴다"를
+    "로그인 자체가 안 됐다"와 구분해야 클라이언트가 다른 화면의 세션을 지우지 않는다.)
+    """
     user = _admin_from_token(conn, token)
     if user:
         return user
     rep = _rep_from_token(conn, token)
-    if not rep or not rep.get("dealer_id"):
-        # 소속 대리점이 없으면 볼 범위가 정해지지 않으므로 재고 화면을 쓰지 못한다.
+    if not rep:
         return None
+    if not rep.get("dealer_id"):
+        # 소속 대리점이 없으면 볼 범위가 정해지지 않으므로 재고 화면을 쓰지 못한다.
+        return "no_dealer"
     return _dealer_user_from_rep(rep)
 
 
@@ -418,6 +426,13 @@ def require_inventory_user(fn):
     def wrapped(*args, **kwargs):
         with db_session() as conn:
             user = _inventory_user_from_token(conn, _request_token())
+        if user == "no_dealer":
+            return jsonify(
+                {
+                    "error": "NO_DEALER",
+                    "message": "소속 대리점이 없는 계정이라 재고 화면을 쓸 수 없습니다. 관리자에게 문의하세요.",
+                }
+            ), 403
         if not user:
             return jsonify(
                 {"error": "INVENTORY_AUTH_REQUIRED", "message": "재고 화면 로그인이 필요합니다."}
@@ -1467,19 +1482,27 @@ def delete_test_accounts():
 @app.route("/api/reps", methods=["POST"])
 @require_admin
 def create_rep():
+    """관리자가 화면에서 직접 사원(테스트 계정 포함)을 추가한다. 있는 고유ID면 덮어쓴다."""
     body = request.get_json(force=True)
     name = (body.get("name") or "").strip()
     employee_code = normalize_employee_code(body.get("employee_code"))
     dealer_code = (body.get("dealer_code") or "").strip()
+    dealer_role = (body.get("dealer_role") or "").strip()
     if not name or not employee_code:
-        return jsonify({"error": "name, employee_code required"}), 400
+        return jsonify({"error": "BAD_INPUT", "message": "이름과 고유ID를 입력해주세요."}), 400
+    if dealer_role and dealer_role not in DEALER_ROLES:
+        return jsonify({"error": "BAD_ROLE", "message": "manager 또는 staff 여야 합니다."}), 400
 
     with db_session() as conn:
+        if conn.execute("SELECT 1 FROM admins WHERE UPPER(username) = ?", (employee_code,)).fetchone():
+            return jsonify(
+                {"error": "EMPLOYEE_CODE_EXISTS", "message": "SKT 계정 아이디와 같은 고유ID는 쓸 수 없습니다."}
+            ), 409
         dealer_id = None
         if dealer_code:
             dealer = conn.execute("SELECT * FROM dealers WHERE dealer_code = ?", (dealer_code,)).fetchone()
             if not dealer:
-                return jsonify({"error": "DEALER_NOT_FOUND"}), 404
+                return jsonify({"error": "DEALER_NOT_FOUND", "message": "대리점코드를 찾을 수 없습니다."}), 404
             dealer_id = dealer["id"]
 
         existing = find_rep(conn, employee_code)
@@ -1488,6 +1511,8 @@ def create_rep():
                 "UPDATE reps SET name = ?, dealer_id = COALESCE(?, dealer_id), employee_code = ? WHERE id = ?",
                 (name, dealer_id, employee_code, existing["id"]),
             )
+            if dealer_role:
+                conn.execute("UPDATE reps SET dealer_role = ? WHERE id = ?", (dealer_role, existing["id"]))
             # 비밀번호가 비어 있으면 초기값(고유ID)으로 채운다. 이미 바꾼 비번은 유지.
             if not existing["password_hash"]:
                 conn.execute(
@@ -1499,8 +1524,10 @@ def create_rep():
             rep_id = new_id()
             conn.execute(
                 """
-                INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, device_id, created_at)
-                VALUES (?, ?, ?, ?, ?, NULL, ?)
+                INSERT INTO reps (
+                    id, dealer_id, name, employee_code, password_hash, device_id, created_at, dealer_role,
+                    must_change_password
+                ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 1)
                 """,
                 (
                     rep_id,
@@ -1509,10 +1536,86 @@ def create_rep():
                     employee_code,
                     hash_password(default_password_for(employee_code)),
                     now_iso(),
+                    dealer_role or "staff",
                 ),
             )
             rep = _rep_with_dealer(conn, rep_id)
         return jsonify(public_rep(rep)), 201
+
+
+@app.route("/api/reps/<rep_id>", methods=["PATCH"])
+@require_admin
+def update_rep(rep_id):
+    """관리자가 사원의 고유ID·이름·소속대리점·구분을 직접 고친다. 넘긴 항목만 바뀐다."""
+    body = request.get_json(force=True, silent=True) or {}
+    with db_session() as conn:
+        existing = conn.execute("SELECT * FROM reps WHERE id = ?", (rep_id,)).fetchone()
+        if not existing:
+            return jsonify({"error": "REP_NOT_FOUND"}), 404
+
+        updates: dict = {}
+
+        if "employee_code" in body:
+            new_code = normalize_employee_code(body.get("employee_code"))
+            if not new_code:
+                return jsonify({"error": "BAD_INPUT", "message": "고유ID를 입력해주세요."}), 400
+            clash = find_rep(conn, new_code)
+            if clash and clash["id"] != rep_id:
+                return jsonify({"error": "EMPLOYEE_CODE_EXISTS", "message": "이미 있는 고유ID입니다."}), 409
+            if new_code != normalize_employee_code(existing["employee_code"]) and conn.execute(
+                "SELECT 1 FROM admins WHERE UPPER(username) = ?", (new_code,)
+            ).fetchone():
+                return jsonify(
+                    {"error": "EMPLOYEE_CODE_EXISTS", "message": "SKT 계정 아이디와 같은 고유ID는 쓸 수 없습니다."}
+                ), 409
+            updates["employee_code"] = new_code
+
+        if "name" in body:
+            name = (body.get("name") or "").strip()
+            if not name:
+                return jsonify({"error": "BAD_INPUT", "message": "이름을 입력해주세요."}), 400
+            updates["name"] = name
+
+        if "dealer_code" in body:
+            dealer_code = (body.get("dealer_code") or "").strip()
+            if dealer_code:
+                dealer = conn.execute("SELECT * FROM dealers WHERE dealer_code = ?", (dealer_code,)).fetchone()
+                if not dealer:
+                    return jsonify({"error": "DEALER_NOT_FOUND", "message": "대리점코드를 찾을 수 없습니다."}), 404
+                updates["dealer_id"] = dealer["id"]
+            else:
+                updates["dealer_id"] = None
+
+        if "dealer_role" in body:
+            dealer_role = (body.get("dealer_role") or "").strip()
+            if dealer_role not in DEALER_ROLES:
+                return jsonify({"error": "BAD_ROLE", "message": "manager 또는 staff 여야 합니다."}), 400
+            updates["dealer_role"] = dealer_role
+
+        if body.get("reset_password"):
+            # 비밀번호를 고유ID로 되돌리고 다음 로그인 때 반드시 바꾸게 한다.
+            code_for_pw = updates.get("employee_code", normalize_employee_code(existing["employee_code"]))
+            updates["password_hash"] = hash_password(code_for_pw)
+            updates["must_change_password"] = 1
+
+        if not updates:
+            return jsonify({"error": "BAD_INPUT", "message": "바꿀 값이 없습니다."}), 400
+
+        set_sql = ", ".join(f"{key} = ?" for key in updates)
+        conn.execute(f"UPDATE reps SET {set_sql} WHERE id = ?", (*updates.values(), rep_id))
+        return jsonify(public_rep(_rep_with_dealer(conn, rep_id)))
+
+
+@app.route("/api/reps/<rep_id>", methods=["DELETE"])
+@require_admin
+def remove_rep(rep_id):
+    """관리자가 사원 계정을 직접 지운다. 방문·포인트·리워드 기록도 함께 사라지고 되돌릴 수 없다."""
+    with db_session() as conn:
+        existing = conn.execute("SELECT id FROM reps WHERE id = ?", (rep_id,)).fetchone()
+        if not existing:
+            return jsonify({"error": "REP_NOT_FOUND"}), 404
+        delete_rep(conn, rep_id)
+        return jsonify({"ok": True})
 
 
 @app.route("/api/reps/<rep_id>")

@@ -11,6 +11,8 @@ let inventoryDealer = "";
 let lastInventoryData = null;
 let adminCanEdit = false; // SKT 총괄만 true. SKT 직원은 조회 전용.
 let allReps = [];
+let allDealers = [];
+let editingRepId = ""; // 지금 인라인 편집 중인 영업사원 id
 let activeAdminTab = "ops";
 
 function $(id) {
@@ -748,18 +750,53 @@ async function handleChangeAdminPassword() {
 }
 
 async function loadDealers() {
-  const dealers = await api("/dealers");
+  allDealers = await api("/dealers");
   const container = $("dealerList");
   container.innerHTML = "";
-  if (dealers.length === 0) {
+  if (allDealers.length === 0) {
     container.innerHTML = '<p class="empty">등록된 대리점이 없습니다. 엑셀을 올려주세요.</p>';
+  } else {
+    for (const d of allDealers) {
+      const el = document.createElement("div");
+      el.className = "item-card";
+      el.innerHTML = `<div class="store-name">${escHtml(d.name)}</div><div class="muted small">대리점ID: ${escHtml(d.dealer_code)}</div>`;
+      container.appendChild(el);
+    }
+  }
+  const datalist = $("dealerCodeList");
+  if (datalist) {
+    datalist.innerHTML = allDealers
+      .map((d) => `<option value="${escHtml(d.dealer_code)}">${escHtml(d.name)}</option>`)
+      .join("");
+  }
+}
+
+async function handleAddRep() {
+  const msg = $("repMessage");
+  const name = $("newRepName").value.trim();
+  const code = $("newRepCode").value.trim();
+  const dealerCode = $("newRepDealerCode").value.trim();
+  const role = $("newRepRole").value;
+  if (!name || !code) {
+    msg.textContent = "이름과 고유ID를 입력해주세요.";
     return;
   }
-  for (const d of dealers) {
-    const el = document.createElement("div");
-    el.className = "item-card";
-    el.innerHTML = `<div class="store-name">${escHtml(d.name)}</div><div class="muted small">대리점ID: ${escHtml(d.dealer_code)}</div>`;
-    container.appendChild(el);
+  const btn = $("addRepBtn");
+  btn.disabled = true;
+  try {
+    const rep = await api("/reps", {
+      method: "POST",
+      body: JSON.stringify({ name, employee_code: code, dealer_code: dealerCode, dealer_role: role }),
+    });
+    $("newRepName").value = "";
+    $("newRepCode").value = "";
+    $("newRepDealerCode").value = "";
+    msg.textContent = `'${rep.name}'(${rep.employee_code}) 계정을 저장했습니다. 초기 비밀번호는 고유ID와 같습니다.`;
+    await loadReps();
+  } catch (err) {
+    msg.textContent = String(err.message || err);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -794,6 +831,54 @@ function renderReps() {
     el.className = "item-card";
     const hasDealer = Boolean(r.dealer_id);
     const role = r.dealer_role === "manager" ? "manager" : "staff";
+
+    if (adminCanEdit && editingRepId === r.id) {
+      el.innerHTML = `
+        <div class="row">
+          <input data-edit-name value="${escHtml(r.name)}" placeholder="이름" />
+          <input data-edit-code value="${escHtml(r.employee_code)}" placeholder="고유ID" />
+        </div>
+        <div class="row">
+          <input data-edit-dealer value="${escHtml(r.dealer_code || "")}" placeholder="소속 대리점코드 (비우면 소속 없음)" list="dealerCodeList" />
+          <select data-edit-role>
+            <option value="staff"${role === "staff" ? " selected" : ""}>대리점 직원</option>
+            <option value="manager"${role === "manager" ? " selected" : ""}>대리점 관리자</option>
+          </select>
+        </div>
+        <label class="check-line">
+          <input type="checkbox" data-edit-reset-pw />
+          비밀번호를 고유ID로 초기화 (다음 로그인 때 변경 강제)
+        </label>
+        <div class="row planted-actions">
+          <button class="btn-primary compact" data-save>저장</button>
+          <button class="btn-secondary compact" data-cancel>취소</button>
+        </div>
+      `;
+      el.querySelector("[data-save]").addEventListener("click", async () => {
+        const payload = {
+          name: el.querySelector("[data-edit-name]").value.trim(),
+          employee_code: el.querySelector("[data-edit-code]").value.trim(),
+          dealer_code: el.querySelector("[data-edit-dealer]").value.trim(),
+          dealer_role: el.querySelector("[data-edit-role]").value,
+        };
+        if (el.querySelector("[data-edit-reset-pw]").checked) payload.reset_password = true;
+        try {
+          const updated = await api(`/reps/${r.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+          editingRepId = "";
+          $("repMessage").textContent = `${updated.name}(${updated.employee_code}) 정보를 저장했습니다.`;
+          await loadReps();
+        } catch (err) {
+          $("repMessage").textContent = String(err.message || err);
+        }
+      });
+      el.querySelector("[data-cancel]").addEventListener("click", () => {
+        editingRepId = "";
+        renderReps();
+      });
+      container.appendChild(el);
+      continue;
+    }
+
     el.innerHTML = `
       <div class="between" style="margin-top:0">
         <div>
@@ -809,14 +894,22 @@ function renderReps() {
             }
           </div>
         </div>
-        ${
-          hasDealer
-            ? `<select data-dealer-role aria-label="대리점 관리자/직원 구분">
-                 <option value="staff"${role === "staff" ? " selected" : ""}>대리점 직원</option>
-                 <option value="manager"${role === "manager" ? " selected" : ""}>대리점 관리자</option>
-               </select>`
-            : '<span class="muted small">재고 화면 사용 불가</span>'
-        }
+        <div class="row" style="margin-top:0">
+          ${
+            hasDealer
+              ? `<select data-dealer-role aria-label="대리점 관리자/직원 구분">
+                   <option value="staff"${role === "staff" ? " selected" : ""}>대리점 직원</option>
+                   <option value="manager"${role === "manager" ? " selected" : ""}>대리점 관리자</option>
+                 </select>`
+              : '<span class="muted small">재고 화면 사용 불가</span>'
+          }
+          ${
+            adminCanEdit
+              ? `<button class="btn-secondary compact" data-edit>편집</button>
+                 <button class="btn-secondary compact" data-delete>삭제</button>`
+              : ""
+          }
+        </div>
       </div>
     `;
     const select = el.querySelector("[data-dealer-role]");
@@ -836,6 +929,32 @@ function renderReps() {
           $("repMessage").textContent = String(err.message || err);
         } finally {
           select.disabled = false;
+        }
+      });
+    }
+    const editBtn = el.querySelector("[data-edit]");
+    if (editBtn) {
+      editBtn.addEventListener("click", () => {
+        editingRepId = r.id;
+        renderReps();
+      });
+    }
+    const deleteBtn = el.querySelector("[data-delete]");
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", async () => {
+        if (
+          !confirm(
+            `'${r.name}'(${r.employee_code}) 계정을 삭제할까요? 방문·포인트·리워드 기록도 함께 사라지고 되돌릴 수 없습니다.`
+          )
+        ) {
+          return;
+        }
+        try {
+          await api(`/reps/${r.id}`, { method: "DELETE" });
+          $("repMessage").textContent = `'${r.name}'(${r.employee_code}) 계정을 삭제했습니다.`;
+          await loadReps();
+        } catch (err) {
+          $("repMessage").textContent = String(err.message || err);
         }
       });
     }
@@ -1217,6 +1336,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("refreshAccountsBtn")) $("refreshAccountsBtn").addEventListener("click", loadAccounts);
   if ($("createAccountBtn")) $("createAccountBtn").addEventListener("click", handleCreateAccount);
   if ($("repSearch")) $("repSearch").addEventListener("input", renderReps);
+  if ($("addRepBtn")) $("addRepBtn").addEventListener("click", handleAddRep);
   if ($("createTestAccountsBtn")) $("createTestAccountsBtn").addEventListener("click", handleCreateTestAccounts);
   if ($("deleteTestAccountsBtn")) $("deleteTestAccountsBtn").addEventListener("click", handleDeleteTestAccounts);
   if ($("storeSearch")) $("storeSearch").addEventListener("input", handleStoreSearchInput);

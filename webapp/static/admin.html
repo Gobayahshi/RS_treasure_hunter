@@ -194,6 +194,28 @@
         <button id="deleteTestAccountsBtn" class="btn-secondary">테스트 계정 모두 삭제</button>
         <p id="testAccountMessage" class="muted small"></p>
       </div>
+
+      <div class="card" data-super-only>
+        <h3 class="section-title" style="margin-top:0">사용자 직접 추가</h3>
+        <p class="muted small">
+          이름·고유ID·소속대리점·구분을 직접 입력해 계정을 만듭니다. 이미 있는 고유ID를 입력하면 그 계정 정보를 덮어씁니다.
+          초기 비밀번호는 고유ID와 같고, 처음 로그인할 때 반드시 바꿔야 합니다.
+        </p>
+        <div class="row">
+          <input id="newRepName" type="text" placeholder="이름" autocomplete="off" />
+          <input id="newRepCode" type="text" placeholder="고유ID (SWING ID)" autocomplete="off" />
+        </div>
+        <div class="row">
+          <input id="newRepDealerCode" type="text" placeholder="소속 대리점코드 (선택, 예: D13469)" list="dealerCodeList" autocomplete="off" />
+          <select id="newRepRole">
+            <option value="staff">대리점 직원</option>
+            <option value="manager">대리점 관리자</option>
+          </select>
+        </div>
+        <datalist id="dealerCodeList"></datalist>
+        <button id="addRepBtn" class="btn-primary">추가 / 덮어쓰기</button>
+      </div>
+
       <p class="muted small">
         영업사원은 곧 대리점 직원입니다. 같은 고유ID로 재고 화면에도 로그인합니다.
         관리자/직원 구분은 권한 차이 없이 표시용입니다.

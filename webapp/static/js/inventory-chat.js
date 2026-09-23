@@ -1,4 +1,8 @@
-const TOKEN_KEY = "rs_inventory_token";
+// 보물찾기(app.js)와 관리자 콘솔(admin.js)이 쓰는 것과 같은 localStorage 키를 그대로 쓴다.
+// 한 번 로그인하면 다른 화면도 다시 로그인하지 않아도 되게 하기 위해서다 (2026-09-23).
+const REP_TOKEN_KEY = "rs_rep_token"; // app.js 와 공유
+const ADMIN_TOKEN_KEY = "rs_admin_token"; // admin.js 와 공유
+let activeTokenKind = ""; // "admin" | "rep" | "" — 지금 세션이 어느 쪽 키를 쓰는지
 
 let chatMap = null;
 let chatMarkers = null;
@@ -53,13 +57,35 @@ function appUrl(path) {
   return `${base}${path}`;
 }
 
-function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || "";
+function getStoredTokens() {
+  return {
+    admin: localStorage.getItem(ADMIN_TOKEN_KEY) || "",
+    rep: localStorage.getItem(REP_TOKEN_KEY) || "",
+  };
 }
 
-function setToken(token) {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
+function getToken() {
+  // 세션 종류가 정해져 있으면(로그인·복원 성공 후) 그 키만 쓴다.
+  const { admin, rep } = getStoredTokens();
+  if (activeTokenKind === "rep") return rep;
+  if (activeTokenKind === "admin") return admin;
+  return admin || rep;
+}
+
+function setToken(token, kind) {
+  if (!token) {
+    // 재고 화면에서 로그아웃하면 같은 세션인 보물찾기/관리자 콘솔도 함께 로그아웃된다.
+    localStorage.removeItem(ADMIN_TOKEN_KEY);
+    localStorage.removeItem(REP_TOKEN_KEY);
+    activeTokenKind = "";
+    return;
+  }
+  if (kind === "rep") {
+    localStorage.setItem(REP_TOKEN_KEY, token);
+  } else {
+    localStorage.setItem(ADMIN_TOKEN_KEY, token);
+  }
+  activeTokenKind = kind;
 }
 
 function authHeaders(extra) {
@@ -107,9 +133,18 @@ async function api(path, options = {}) {
     }
   }
   if (res.status === 401) {
-    setToken("");
+    // 이 화면에서 쓰던 토큰만 지운다. 다른 화면(보물찾기/관리자)의 로그인은 건드리지 않는다.
+    if (activeTokenKind === "rep") localStorage.removeItem(REP_TOKEN_KEY);
+    else if (activeTokenKind === "admin") localStorage.removeItem(ADMIN_TOKEN_KEY);
+    activeTokenKind = "";
     showLoggedOut();
     throw new Error((data && data.message) || "대리점 로그인이 필요합니다.");
+  }
+  if (res.status === 403 && data && data.error === "NO_DEALER") {
+    // 로그인 자체는 유효하다(보물찾기는 계속 쓸 수 있다). 재고 화면만 못 쓰는 것이라 토큰은 지우지 않는다.
+    const err = new Error(data.message);
+    err.code = "NO_DEALER";
+    throw err;
   }
   if (res.status === 403 && data && data.error === "PASSWORD_CHANGE_REQUIRED") {
     // 초기 비밀번호를 바꾸기 전까지는 변경 화면만 쓸 수 있다.
@@ -895,7 +930,8 @@ async function handleLogin() {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
-    setToken(data.token);
+    // 대리점 직원은 보물찾기와, SKT 계정은 관리자 콘솔과 같은 로그인 키를 쓴다.
+    setToken(data.token, data.role === "dealer" ? "rep" : "admin");
     $("chatPassword").value = "";
     if (data.must_change_password) {
       showPasswordChange(data);
@@ -981,6 +1017,7 @@ async function handleLogout() {
   } catch (_) {
     /* ignore */
   }
+  // 같은 세션을 공유하므로 보물찾기/관리자 콘솔에서도 함께 로그아웃된다.
   setToken("");
   showLoggedOut();
 }
@@ -1536,22 +1573,45 @@ function submitChat(text) {
 }
 
 async function restore() {
-  if (!getToken()) {
+  const { admin, rep } = getStoredTokens();
+  if (!admin && !rep) {
     showLoggedOut();
     return;
   }
-  try {
-    const me = await api("/inventory/me");
-    if (me.must_change_password) {
-      showPasswordChange(me);
+  // 보물찾기나 관리자 콘솔에서 이미 로그인했다면 그 토큰으로 바로 들어간다.
+  // 둘 다 있으면 관리자 쪽을 먼저 시도한다 (죽은 토큰이면 사원 쪽으로 넘어간다).
+  for (const [kind, token] of [
+    ["admin", admin],
+    ["rep", rep],
+  ]) {
+    if (!token) continue;
+    activeTokenKind = kind;
+    try {
+      const me = await api("/inventory/me");
+      if (me.must_change_password) {
+        showPasswordChange(me);
+        return;
+      }
+      await showLoggedIn(me);
+      greet();
       return;
+    } catch (err) {
+      if (err && err.code === "NO_DEALER") {
+        // 유효한 로그인이지만(보물찾기는 계속 쓸 수 있다) 이 화면은 못 쓴다. 토큰은 지우지 않는다.
+        activeTokenKind = "";
+        showLoggedOut();
+        const loginError = $("chatLoginError");
+        if (loginError) {
+          loginError.textContent = err.message;
+          loginError.classList.remove("hidden");
+        }
+        return;
+      }
+      // 이 토큰은 죽었다. 다음 후보로 넘어간다 (api() 가 이미 해당 키를 지웠다).
     }
-    await showLoggedIn(me);
-    greet();
-  } catch (_) {
-    setToken("");
-    showLoggedOut();
   }
+  activeTokenKind = "";
+  showLoggedOut();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
