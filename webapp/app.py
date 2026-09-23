@@ -687,10 +687,14 @@ def _run_inventory_upload(job_id: str, filename: str, data: bytes, dealer: dict 
         _upload_job_set(job_id, status="parsing", message="파일을 읽는 중...")
         parsed = parse_inventory_file(filename, data)
         if not parsed.get("rows"):
+            # 임시 진단(2026-09-24): 서버가 실제로 받은 바이트를 화면에 노출한다.
+            head = (data or b"")[:8]
+            is_zip = head[:2] == b"PK"
+            diag = f" [진단: 파일명={filename!r}, 받은크기={len(data or b'')}B, 시작={head.hex()}, xlsx?={is_zip}]"
             _upload_job_set(
                 job_id,
                 status="error",
-                message="재고현황 파일로 보이지 않습니다. 보유처매장코드/대표상품명 열이 필요합니다.",
+                message="재고현황 파일로 보이지 않습니다. 보유처매장코드/대표상품명 열이 필요합니다." + diag,
             )
             return
         _upload_job_set(
