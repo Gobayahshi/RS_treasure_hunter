@@ -710,7 +710,7 @@ async function handleAddRep() {
     $("newRepCode").value = "";
     $("newRepDealerCode").value = "";
     $("newRepPhone").value = "";
-    msg.textContent = `'${rep.name}'(${rep.employee_code}) 계정을 저장했습니다. 초기 비밀번호는 고유ID와 같습니다.`;
+    msg.textContent = `${rep.employee_code} 계정을 저장했습니다. 초기 비밀번호는 고유ID와 같습니다.`;
     await loadReps();
   } catch (err) {
     msg.textContent = String(err.message || err);
@@ -799,7 +799,7 @@ function renderReps() {
         try {
           const updated = await api(`/reps/${r.id}`, { method: "PATCH", body: JSON.stringify(payload) });
           editingRepId = "";
-          $("repMessage").textContent = `${updated.name}(${updated.employee_code}) 정보를 저장했습니다.`;
+          $("repMessage").textContent = `${updated.employee_code} 정보를 저장했습니다.`;
           await loadReps();
         } catch (err) {
           $("repMessage").textContent = String(err.message || err);
@@ -816,8 +816,8 @@ function renderReps() {
     el.innerHTML = `
       <div class="between" style="margin-top:0">
         <div>
-          <div class="store-name">${escHtml(r.name)}</div>
-          <div class="muted small">고유ID: ${escHtml(r.employee_code)} · ${escHtml(r.dealer_name || "소속대리점 없음")} (${escHtml(r.dealer_code || "-")})</div>
+          <div class="store-name">고유ID: ${escHtml(r.employee_code)}</div>
+          <div class="muted small">${escHtml(r.dealer_name || "소속대리점 없음")} (${escHtml(r.dealer_code || "-")})</div>
           <div class="muted small">
             ${
               r.has_phone
@@ -857,7 +857,7 @@ function renderReps() {
             body: JSON.stringify({ dealer_role: next }),
           });
           r.dealer_role = updated.dealer_role;
-          $("repMessage").textContent = `${r.name}님을 ${next === "manager" ? "대리점 관리자" : "대리점 직원"}로 바꿨습니다.`;
+          $("repMessage").textContent = `${r.employee_code}을(를) ${next === "manager" ? "대리점 관리자" : "대리점 직원"}로 바꿨습니다.`;
         } catch (err) {
           select.value = role;
           $("repMessage").textContent = String(err.message || err);
@@ -878,14 +878,14 @@ function renderReps() {
       deleteBtn.addEventListener("click", async () => {
         if (
           !confirm(
-            `'${r.name}'(${r.employee_code}) 계정을 삭제할까요? 방문·포인트·리워드 기록도 함께 사라지고 되돌릴 수 없습니다.`
+            `${r.employee_code} 계정을 삭제할까요? 방문·포인트·리워드 기록도 함께 사라지고 되돌릴 수 없습니다.`
           )
         ) {
           return;
         }
         try {
           await api(`/reps/${r.id}`, { method: "DELETE" });
-          $("repMessage").textContent = `'${r.name}'(${r.employee_code}) 계정을 삭제했습니다.`;
+          $("repMessage").textContent = `${r.employee_code} 계정을 삭제했습니다.`;
           await loadReps();
         } catch (err) {
           $("repMessage").textContent = String(err.message || err);
@@ -964,18 +964,20 @@ function handleStoreSearchInput() {
 
 async function loadStores(q = "") {
   const container = $("storeList");
-  const data = await api(`/stores?limit=50${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+  if (!q) {
+    container.innerHTML = '<p class="muted small">검색어를 입력하면 판매점을 찾습니다.</p>';
+    return;
+  }
+  const data = await api(`/stores?limit=50&q=${encodeURIComponent(q)}`);
   container.innerHTML = "";
   const summary = document.createElement("p");
   summary.className = "muted small";
-  summary.textContent = q
-    ? `"${q}" 검색 결과 ${data.matched}곳 중 ${data.items.length}곳 표시 (전체 판매점 ${data.total}곳)`
-    : `전체 ${data.total}곳 중 최근 ${data.items.length}곳. 검색어를 입력하면 전체에서 찾습니다.`;
+  summary.textContent = `"${q}" 검색 결과 ${data.matched}곳 중 ${data.items.length}곳 표시 (전체 판매점 ${data.total}곳)`;
   container.appendChild(summary);
   if (data.items.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = q ? "검색 결과가 없습니다." : "등록된 판매점이 없습니다.";
+    empty.textContent = "검색 결과가 없습니다.";
     container.appendChild(empty);
     return;
   }
