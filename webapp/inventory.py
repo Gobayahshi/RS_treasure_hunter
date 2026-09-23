@@ -235,7 +235,17 @@ def parse_inventory_file(filename: str, data: bytes) -> dict[str, Any]:
 
 
 def parse_inventory_xlsx(filename: str, data: bytes) -> dict[str, Any]:
-    wb = load_workbook(BytesIO(data), data_only=True, read_only=True)
+    result = _parse_inventory_xlsx(filename, data, read_only=True)
+    if not result.get("rows"):
+        # 재고 시스템에서 바로 뽑은 원본 xlsx는 시트 dimension 정보가 부실해
+        # openpyxl read_only(스트리밍) 모드가 1행만 읽고 멈추는 일이 있다(2026-09-24 유원 파일).
+        # 그럴 때만 전체 로드로 다시 읽는다(메모리를 더 쓰므로 read_only가 빈손일 때만).
+        result = _parse_inventory_xlsx(filename, data, read_only=False)
+    return result
+
+
+def _parse_inventory_xlsx(filename: str, data: bytes, read_only: bool) -> dict[str, Any]:
+    wb = load_workbook(BytesIO(data), data_only=True, read_only=read_only)
     try:
         rows: list[dict[str, str]] = []
         as_of = ""

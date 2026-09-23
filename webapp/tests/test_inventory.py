@@ -75,6 +75,42 @@ def test_parse_inventory_xlsx():
     assert rows[1]["holder_type"] == "retail"
 
 
+def test_parse_inventory_xlsx_falls_back_when_readonly_yields_nothing(monkeypatch):
+    """재고 시스템 원본 xlsx는 read_only 스트리밍이 헤더만 읽고 멈출 때가 있다.
+
+    그 경우 전체 로드(read_only=False)로 재시도해 데이터를 살려야 한다 (2026-09-24 유원 파일).
+    """
+    import inventory
+    from io import BytesIO
+    from openpyxl import Workbook
+
+    full = build_inventory_xlsx(
+        [["pe2810", "핸드폰성지", "갤럭시 Z플립7", "SM-F971", "1,200,000", 6, "SN1", "유원"]]
+    )
+    # read_only 모드가 헤더 행까지만 읽고 멈춘 상황을 흉내낸다 (데이터 0행).
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["보유처매장코드", "보유처", "대표상품명", "모델명", "실구매가", "보유기간", "일련번호", "레벨0조직명"])
+    buf = BytesIO()
+    wb.save(buf)
+    header_only = buf.getvalue()
+
+    real_load = inventory.load_workbook
+    calls = []
+
+    def fake_load(_fh, **kw):
+        calls.append(kw.get("read_only"))
+        payload = header_only if kw.get("read_only") else full
+        return real_load(BytesIO(payload), **kw)
+
+    monkeypatch.setattr(inventory, "load_workbook", fake_load)
+
+    parsed = parse_inventory_file("재고현황.xlsx", full)
+    assert calls == [True, False]  # read_only 먼저 → 빈손 → 전체 로드로 폴백
+    assert len(parsed["rows"]) == 1
+    assert parsed["rows"][0]["store_code"] == "PE2810"
+
+
 def test_map_points_join_matches_store_master(server, fixtures):
     """소문자·공백이 섞인 코드로 올려도 판매점 마스터와 이어져 좌표가 붙는다."""
     from db import db_session
