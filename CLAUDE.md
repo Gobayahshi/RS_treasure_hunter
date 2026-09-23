@@ -77,8 +77,10 @@ webapp/
 
 - **다른 대화창이 하지 않을 것:** 새 역할 추가, 새 로그인 화면·경로 추가, 새 세션 테이블 추가, 데코레이터 규칙 변경, 로그인 ID 체계 변경. 필요하면 계정 트랙에 요청하고, 자기 프로젝트 섹션의 "다음 할 일"에 적어 둔다.
 - **다른 대화창이 해도 되는 것:** 이미 있는 데코레이터(`require_admin` 등)를 새 API에 **붙이는 것**. 어떤 역할이 그 기능을 쓸지 애매하면 사용자에게 묻는다.
-- **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/reps*`, `/api/*/login|logout|me|change-password|reset-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions` 스키마, `/admin`의 계정·영업사원 화면(추가/편집/삭제 포함), 재고 로그인 화면, 세 화면의 로그인 토큰 저장 방식(`rs_rep_token`/`rs_admin_token` 공유).
-- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py`, `test_password.py`, `test_rep_crud.py`, `test_skt_account_upload.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
+- **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/reps*`, `/api/dealers*`, `/api/*/login|logout|me|change-password|reset-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions`/`dealers` 스키마, `/admin`의 계정·영업사원 화면(추가/편집/삭제 포함), 재고 로그인 화면, 세 화면의 로그인 토큰 저장 방식(`rs_rep_token`/`rs_admin_token` 공유).
+- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py`, `test_password.py`, `test_rep_crud.py`, `test_dealer_crud.py`, `test_skt_account_upload.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
+- **대리점 삭제 (2026-09-24 추가):** `DELETE /api/dealers/<id>`(총괄만) — 소속 영업사원과 그 방문·포인트·리워드 기록까지 함께 지운다(`delete_rep()` 재사용). 그 대리점 재고 업로드(`inventory_uploads`/`inventory_items`)도 지운다. 판매점(`stores`) 마스터는 지우지 않고 `dealer_id`만 NULL로 돌린다 — 대리점이 없어져도 P코드 자체는 남아야 해서다. `/admin`에는 이 기능을 누를 버튼이 없다(대리점 목록 섹션을 없앴기 때문) — 필요하면 API를 직접 호출한다. 되돌릴 수 없다.
+  - 리포지토리에 있는 `webapp/seed/rs_treasure.db`(배포용 시드)에 예시 대리점 `DEAL001`(강남대리점)/`DEAL002`(분당대리점)와 그 사원(EMP001/EMP002)이 실제로 박혀 있었다 — `excel_import.py`의 엑셀 템플릿 예시 값이 실수로 시드 DB에도 반영된 것으로 보인다. 로컬 개발 DB(`webapp/rs_treasure.db`)에서는 지웠지만, **시드 파일 자체는 아직 안 지워졌다**(바이너리 DB 파일을 스크립트로 직접 고치는 게 안전 분류기에 막혔다) — 다음에 이 파일을 다시 만들 때(재고/판매점 갱신 등) 같이 정리하거나, 사용자가 직접 확인 후 지워야 한다.
 - **아직 정하지 않은 것 (계정 트랙에서 결정):** 판매점(P코드) 계정 발급 방식과 초기 비밀번호(프로젝트 3), 정책 챗봇 이용 범위(프로젝트 4).
 
 #### 비밀번호 (2026-09-22 결정)

@@ -1291,6 +1291,35 @@ def list_dealers():
         return jsonify([row_to_dict(r) for r in rows])
 
 
+@app.route("/api/dealers/<dealer_id>", methods=["DELETE"])
+@require_admin
+def remove_dealer(dealer_id):
+    """대리점을 지운다. 소속 영업사원과 그 기록(방문·포인트·리워드)까지 함께 사라지고 되돌릴 수 없다.
+
+    판매점(store) 마스터는 지우지 않는다 — 그 대리점 소속 표시만 지운다(dealer_id를 NULL로).
+    """
+    with db_session() as conn:
+        dealer = conn.execute("SELECT id FROM dealers WHERE id = ?", (dealer_id,)).fetchone()
+        if not dealer:
+            return jsonify({"error": "DEALER_NOT_FOUND"}), 404
+
+        rep_ids = [r["id"] for r in conn.execute("SELECT id FROM reps WHERE dealer_id = ?", (dealer_id,)).fetchall()]
+        for rep_id in rep_ids:
+            delete_rep(conn, rep_id)
+
+        conn.execute(
+            "DELETE FROM inventory_items WHERE upload_id IN (SELECT id FROM inventory_uploads WHERE dealer_id = ?)",
+            (dealer_id,),
+        )
+        conn.execute("DELETE FROM inventory_uploads WHERE dealer_id = ?", (dealer_id,))
+        stores_updated = conn.execute(
+            "UPDATE stores SET dealer_id = NULL WHERE dealer_id = ?", (dealer_id,)
+        ).rowcount
+        conn.execute("DELETE FROM dealers WHERE id = ?", (dealer_id,))
+
+        return jsonify({"ok": True, "reps_removed": len(rep_ids), "stores_unassigned": stores_updated})
+
+
 @app.route("/api/reps")
 @require_skt
 def list_reps():
