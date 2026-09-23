@@ -76,7 +76,7 @@ webapp/
 - **다른 대화창이 하지 않을 것:** 새 역할 추가, 새 로그인 화면·경로 추가, 새 세션 테이블 추가, 데코레이터 규칙 변경, 로그인 ID 체계 변경. 필요하면 계정 트랙에 요청하고, 자기 프로젝트 섹션의 "다음 할 일"에 적어 둔다.
 - **다른 대화창이 해도 되는 것:** 이미 있는 데코레이터(`require_admin` 등)를 새 API에 **붙이는 것**. 어떤 역할이 그 기능을 쓸지 애매하면 사용자에게 묻는다.
 - **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/reps*`, `/api/*/login|logout|me|change-password|reset-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions` 스키마, `/admin`의 계정·영업사원 화면(추가/편집/삭제 포함), 재고 로그인 화면, 세 화면의 로그인 토큰 저장 방식(`rs_rep_token`/`rs_admin_token` 공유).
-- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py`, `test_password.py`, `test_rep_crud.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
+- **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py`, `test_password.py`, `test_rep_crud.py`, `test_skt_account_upload.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
 - **아직 정하지 않은 것 (계정 트랙에서 결정):** 판매점(P코드) 계정 발급 방식과 초기 비밀번호(프로젝트 3), 정책 챗봇 이용 범위(프로젝트 4).
 
 #### 비밀번호 (2026-09-22 결정)
@@ -101,6 +101,10 @@ webapp/
 - **사용자 직접 추가/편집/삭제 (2026-09-23, 총괄 전용):** `/admin` 영업사원 탭 위쪽 "사용자 직접 추가" 카드 + 각 행의 편집/삭제 버튼.
   - `POST /api/reps`(추가, 있는 고유ID면 덮어씀) · `PATCH /api/reps/<id>`(이름·고유ID·소속대리점·구분·`reset_password` 중 넘긴 것만 수정) · `DELETE /api/reps/<id>`(계정 + 방문·포인트·리워드 기록까지 삭제, 되돌릴 수 없음). 셋 다 `require_admin`(총괄만) — SKT 직원은 기존 `dealer-role` PATCH만 그대로 가능하다.
   - 고유ID는 SKT 계정 아이디와 겹치면 409. 대리점은 `dealer_code`로 지정하고, 화면의 `<datalist id="dealerCodeList">`(전체 대리점 목록)로 입력을 돕는다. 테스트 계정도 같은 화면에서 만들고 지울 수 있다(일괄 버튼과 별개로 개별 편집도 된다).
+- **SKT 팀 자체 계정 일괄 등록 (2026-09-23):** `/admin` 엑셀 마스터 업로드가 `이름/ID/PW/구분·권한` 모양 시트(예: `2609_RS팀 직원 리스트.xlsx`)를 자동 인식한다. `구분/권한` 열이 있으면 다른 무엇보다 먼저 `skt_accounts` 버킷으로 분류한다(`excel_import.SKT_ROLE_ALIASES` — 대리점 사원 시트와 헷갈리지 않는 유일한 신호). `구분/권한`이 `admin`이면 총괄(`super`), 그 외(예: `SKT`)면 조회 전용 직원(`staff`)으로 `admins`에 만든다. PW 열은 참고용이고 실제 초기 비밀번호는 항상 ID(사번) 그대로다 — 다른 계정 생성 경로와 동일하게 `must_change_password=1`.
+  - 재업로드하면 역할만 갱신하고 이미 바꾼 비밀번호는 건드리지 않는다(대리점 사원 재업로드와 같은 규칙). ID가 대리점 사원 고유ID와 겹치면 건너뛴다.
+  - `admins.name`(2026-09-23 추가 컬럼)에 이름을 저장해 목록에서 사번 대신 이름으로 보여준다. 예전 행은 NULL이라 화면에서 username으로 대신한다.
+  - 이 방식으로 만든 "SKT" 역할은 기존 `staff`와 완전히 같다 — 재고 화면에서 전체 대리점을 조회만 하고(업로드 불가), `/admin`에서 전체 대리점/영업사원 통계·랭킹보드를 조회만 한다(수정 불가). 보물찾기(`/`) 자체에는 SKT 계정으로 로그인하지 않는다 — "모든 대리점 통계"는 `/admin`의 랭킹보드·통계 다운로드가 그 역할이다.
 
 ### 반드시 지킬 구현 규칙
 - **시간:** DB에는 UTC로 저장하고, 날짜 경계·근무시간 같은 판단은 한국 시간으로 한다 (`confidence.to_kst`, `app.kst_now`, `app.kst_day_start_utc_iso`).
@@ -205,5 +209,5 @@ webapp/
 - 2026-09-16: 0단계 정리. KST 시간 버그, 검토 대기 처리, 영업사원 토큰 인증, 리워드 차감, 재고 조인 속도, 테스트 도입.
 - 2026-09-17: 1단계 계정 통합. SKT 직원 역할, 사원 고유ID로 재고 로그인, 임시 계정 삭제, `_partner_upload_filter` 복구.
 - 2026-09-22: Sales_info 기반 사원 등록, 전화번호 뒤 4자리 재설정, 고유ID 대소문자 무시, 테스트 계정.
-- 2026-09-23: 세 화면(`/`, `/admin`, `/inventory`) 로그인 토큰 공유(한 번 로그인하면 다 통과), 관리자용 영업사원 추가/편집/삭제 화면.
+- 2026-09-23: 세 화면(`/`, `/admin`, `/inventory`) 로그인 토큰 공유(한 번 로그인하면 다 통과), 관리자용 영업사원 추가/편집/삭제 화면, RS팀 자체 SKT 계정 16명 엑셀 일괄 등록.
 - 로드맵 후보: 보물찾기 운영 준비(규칙 튜닝) → 두 기능 연결(체화 재고 → rare 보물) → 판매점 입력(프로젝트 3).
