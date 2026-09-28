@@ -357,7 +357,11 @@ function ensureMap() {
   // 스타일 로드가 끝난 뒤(레이아웃이 확실히 자리잡은 뒤) 한 번 더 강제로 맞춘다.
   treasureMap.on("load", () => treasureMap.resize());
 
-  treasureMap.on("moveend", () => {
+  // moveend는 resize()/jumpTo()/fitBounds() 같은 프로그램적인 이동에도 발생해서
+  // (originalEvent로 걸러도 못 걸러지는 경우가 있었다 - pulseResize()가 계속 resize()를
+  // 부르는 동안 moveend가 반복 발생 -> loadTreasuresAt이 겹쳐 불려 목록이 "불러오는 중"에
+  // 멈추는 원인이었다), 사용자가 실제로 드래그한 경우에만 발생하는 dragend로 바꾼다.
+  treasureMap.on("dragend", () => {
     if (suppressMapMoveLoad) return;
     if (mapMoveTimer) clearTimeout(mapMoveTimer);
     mapMoveTimer = setTimeout(() => {
@@ -381,7 +385,8 @@ function radiusKmForMapView(map) {
 
 function treasureMarkerElement(tier, withinRadius) {
   const color = withinRadius ? "#16a34a" : tier === "rare" ? "#d97706" : "#2563eb";
-  const label = tier === "rare" ? "★" : "●";
+  // 판매점 리스트의 "⭐ 레어" 배지와 같은 노란 별 이모지로 맞춘다.
+  const label = tier === "rare" ? "⭐" : "●";
   const el = document.createElement("div");
   el.className = "treasure-marker";
   el.innerHTML = `<div class="treasure-pin" style="background:${color}">${label}</div>`;
@@ -531,8 +536,14 @@ async function loadTreasuresAt(lat, lng, options = {}) {
     // 목록은 내 위치 기준 가까운 순으로 보여준다.
     items.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
-    renderTreasureMap(items, { fitBounds });
+    // 목록 렌더링을 먼저 한다 - 지도 쪽(MapLibre 마커/팝업)에서 뭔가 던지더라도
+    // 목록이 "불러오는 중"에 멈춰 있지 않도록.
     renderTreasureList(items, data.total_in_radius, radiusKm);
+    try {
+      renderTreasureMap(items, { fitBounds });
+    } catch (mapErr) {
+      console.error("renderTreasureMap failed", mapErr);
+    }
   } catch (err) {
     if (seq !== mapLoadSeq) return;
     $("treasureList").innerHTML = "";
@@ -561,6 +572,8 @@ async function loadTreasures() {
   }
 }
 
+const TREASURE_LIST_LIMIT = 5;
+
 function renderTreasureList(treasures, totalInRadius, radiusKm = NEARBY_RADIUS_KM) {
   const container = $("treasureList");
   container.innerHTML = "";
@@ -570,14 +583,18 @@ function renderTreasureList(treasures, totalInRadius, radiusKm = NEARBY_RADIUS_K
     return;
   }
 
-  if (totalInRadius && totalInRadius > treasures.length) {
+  // 목록은 가장 가까운 순으로 최대 5곳만 보여준다 (지도 마커는 그대로 다 보인다).
+  const shown = treasures.slice(0, TREASURE_LIST_LIMIT);
+  const total = totalInRadius && totalInRadius > treasures.length ? totalInRadius : treasures.length;
+
+  if (total > shown.length) {
     const note = document.createElement("p");
     note.className = "muted small";
-    note.textContent = `지도 주변 ${totalInRadius}곳 중 가까운 ${treasures.length}곳 (거리는 내 위치 기준)`;
+    note.textContent = `지도 주변 ${total}곳 중 가까운 ${shown.length}곳 (거리는 내 위치 기준)`;
     container.appendChild(note);
   }
 
-  for (const t of treasures) {
+  for (const t of shown) {
     const withinRadius = t.distanceMeters <= VISIT_RADIUS_METERS;
     const el = document.createElement("div");
     el.className = "item-card";
