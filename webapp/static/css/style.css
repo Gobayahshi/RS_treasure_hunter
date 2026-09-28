@@ -802,6 +802,50 @@ body.inventory-assist .topbar .brand-logo {
   margin: 0;
 }
 
+#holdColorBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+#holdColorBar .hold-color-label {
+  font-weight: 600;
+  color: #475569;
+  white-space: nowrap;
+}
+
+#holdColorBar .hold-color-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+#holdColorBar .hold-color-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--chip, #94a3b8);
+  flex: none;
+}
+
+#holdColorBar .hold-color-item input {
+  width: 48px;
+  margin: 0;
+  padding: 3px 4px;
+  text-align: right;
+}
+
+#holdColorBar #holdColorSaveBtn {
+  width: auto;
+  margin: 0;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 /* 매장 직접 등록(직영점) 모달. 여러 화면에서 재사용할 수 있게 프로젝트 전용 클래스로 두지 않는다. */
 .modal-overlay {
   position: fixed;

@@ -34,8 +34,67 @@ let mapModelNames = [];
 let pickedProductShorts = [];
 let pickedModelNames = [];
 let mapPinColor = "";
-let mapColorRules = []; // [{min, max, color}] — 사용자가 직접 정한 보유기간 구간별 색
+let mapColorRules = []; // [{min, max, color}] — 채팅으로 즉석에서 정한 구간별 색 (임시, 한 번만 적용)
 let mapAgedOnly = false;
+
+// 보유기간 기본 색상 4단계. 경계(10/20/30일)는 화면 상단에서 사용자가 직접 바꿔 저장할 수 있다.
+// 채팅으로 매번 다시 말할 필요 없게 브라우저에 저장해두고 계속 쓴다(대리점/기기별 설정).
+const HOLD_COLOR_THRESHOLDS_KEY = "rs_hold_color_thresholds";
+const DEFAULT_HOLD_COLOR_THRESHOLDS = [10, 20, 30];
+const HOLD_COLORS = ["#16a34a", "#ca8a04", "#ea580c", "#dc2626"];
+
+function getHoldColorThresholds() {
+  try {
+    const raw = localStorage.getItem(HOLD_COLOR_THRESHOLDS_KEY);
+    if (!raw) return DEFAULT_HOLD_COLOR_THRESHOLDS.slice();
+    const arr = JSON.parse(raw);
+    if (
+      Array.isArray(arr) &&
+      arr.length === 3 &&
+      arr.every((n) => Number.isFinite(n) && n >= 0) &&
+      arr[0] < arr[1] &&
+      arr[1] < arr[2]
+    ) {
+      return arr;
+    }
+  } catch (_) {
+    /* 저장된 값이 깨졌으면 기본값으로 돌아간다 */
+  }
+  return DEFAULT_HOLD_COLOR_THRESHOLDS.slice();
+}
+
+function holdThresholdColor(days) {
+  const [t1, t2, t3] = getHoldColorThresholds();
+  if (days == null) return HOLD_COLORS[0];
+  if (days <= t1) return HOLD_COLORS[0];
+  if (days <= t2) return HOLD_COLORS[1];
+  if (days <= t3) return HOLD_COLORS[2];
+  return HOLD_COLORS[3];
+}
+
+function renderHoldColorInputs() {
+  const [t1, t2, t3] = getHoldColorThresholds();
+  const ids = ["holdColorT1", "holdColorT2", "holdColorT3"];
+  const values = [t1, t2, t3];
+  ids.forEach((id, i) => {
+    const el = $(id);
+    if (el) el.value = values[i];
+  });
+}
+
+function handleHoldColorSave() {
+  const msg = $("holdColorMsg");
+  const t1 = Number($("holdColorT1").value);
+  const t2 = Number($("holdColorT2").value);
+  const t3 = Number($("holdColorT3").value);
+  if (![t1, t2, t3].every((n) => Number.isFinite(n) && n >= 0) || !(t1 < t2 && t2 < t3)) {
+    if (msg) msg.textContent = "숫자를 작은 순서대로(예: 10, 20, 30) 입력해주세요.";
+    return;
+  }
+  localStorage.setItem(HOLD_COLOR_THRESHOLDS_KEY, JSON.stringify([t1, t2, t3]));
+  if (msg) msg.textContent = "저장했습니다.";
+  if (lastChatMapData) renderChatMap(lastChatMapData, lastChatOrigin, true);
+}
 let catalogPicked = false;
 let mapIncludeRetail = false;
 let mapIncludePartner = true;
@@ -184,6 +243,8 @@ function showLoggedOut() {
   if (uploadBar) uploadBar.classList.add("hidden");
   const filterBar = $("inventoryFilterBar");
   if (filterBar) filterBar.classList.add("hidden");
+  const holdColorBar = $("holdColorBar");
+  if (holdColorBar) holdColorBar.classList.add("hidden");
   const asOf = $("asOfBadge");
   if (asOf) {
     asOf.textContent = "";
@@ -256,6 +317,9 @@ function showLoggedIn(user) {
   if (registerBtn) registerBtn.classList.toggle("hidden", inventoryUser.can_upload === false);
   const filterBar = $("inventoryFilterBar");
   if (filterBar) filterBar.classList.remove("hidden");
+  const holdColorBar = $("holdColorBar");
+  if (holdColorBar) holdColorBar.classList.remove("hidden");
+  renderHoldColorInputs();
   $("chatUser").textContent = inventoryUserLabel(inventoryUser);
   const adminLink = $("chatAdminLink");
   if (adminLink) adminLink.classList.toggle("hidden", !inventoryUser.can_see_all);
@@ -294,9 +358,7 @@ function stockPinColor(point) {
     // 구간 중 어디에도 안 걸리면(예: 정의 안 한 기간) 기본색으로 표시한다.
   }
   if (mapPinColor) return mapPinColor;
-  if (days != null && days >= 30) return "#dc2626";
-  if (days != null && days >= 15) return "#d97706";
-  return "#2563eb";
+  return holdThresholdColor(days);
 }
 
 function isTransientServerError(err) {
@@ -1926,6 +1988,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   const lookupBtn = $("mapLookupBtn");
   if (lookupBtn) lookupBtn.addEventListener("click", applyMapLookup);
+  const holdColorSaveBtn = $("holdColorSaveBtn");
+  if (holdColorSaveBtn) holdColorSaveBtn.addEventListener("click", handleHoldColorSave);
   const productBtn = $("productShortBtn");
   const modelBtn = $("modelNameBtn");
   if (productBtn) productBtn.addEventListener("click", (e) => {
