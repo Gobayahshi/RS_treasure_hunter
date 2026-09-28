@@ -194,13 +194,19 @@ webapp/
   - **공지사항 (새 화면, `static/notices.html` + `js/notices.js`):** `notices` 테이블(`id/title/body/author_name/author_role/created_at`, `db.py` SCHEMA에 추가 — 새 테이블이라 `migrate_schema`는 안 건드렸다. `init_db()`가 부팅마다 SCHEMA를 그대로 다시 실행하고 전부 `CREATE TABLE IF NOT EXISTS`라 기존 배포 DB에도 안전하게 만들어진다). `GET /api/notices`(목록)는 `require_inventory_user`를 그대로 재사용했다 — "로그인한 대리점 직원+SKT 아무나 읽기"에 맞는 기존 데코레이터가 이것뿐이라 새로 만들지 않았다(계정 트랙 규칙: 새 데코레이터 대신 있는 것만 붙인다). 부작용: 소속 대리점이 없는 사원 계정(테스트 계정 `1107711`)은 이 화면도 403 `NO_DEALER`로 못 본다 — 원래도 재고 화면을 못 쓰던 계정이라 새로운 제약은 아니다. `POST/DELETE /api/notices`는 `require_skt`(총괄+직원 둘 다 작성·삭제 가능, 브리프의 "SKT 직원/관리자만 작성"과 일치). 화면에는 SKT 로그인일 때만 "새 공지"/"삭제" 버튼이 보인다(대리점 직원 계정은 버튼 자체가 없다). 제목·내용·작성자 이름 모두 `escHtml()`로 이스케이프(XSS 방지, 2026-09-18 결정과 같은 원칙).
   - `notices.js`는 `inventory-chat.js`의 로그인 방식(같은 두 localStorage 키를 다 확인, `/api/inventory/login`으로 로그인)을 그대로 복사했다 — 계정 트랙이 정한 "새 화면은 이 두 키 중 맞는 쪽을 읽는다" 규칙 그대로다.
   - `.between` 안에 버튼을 직접 넣으면(감싸는 `<div>` 없이) `.btn-secondary`/`.link-btn`의 `width:100%`가 그 줄 전체를 넓게 차지해 제목이 찌그러지는 버그를 이번에 발견했다(직영점 등록 모달 "닫기", 공지 "새 공지" 둘 다 같은 문제). 모달 헤더는 `.modal-box .between .link-btn`에 `width:auto`를 스코프해서 고쳤고, 공지 카드 제목줄의 "삭제"는 인라인 스타일로 고쳤다. 새로 `.between` 안에 버튼을 넣을 때는 감싸는 `<div>`로 폭을 제한하거나 `width:auto`를 명시할 것.
+- **지도 Leaflet → MapLibre GL 전환 (2026-09-28, 보물찾기 + 재고Map만, admin.html의 보물 심기 지도는 그대로 Leaflet):** MapTiler 키가 아직 없어서, 키가 필요 없는 무료 벡터 타일 OpenFreeMap(`https://tiles.openfreemap.org/styles/liberty`)으로 대신했다(사용자 확인 후 결정). `app.js`·`inventory-chat.js` 양쪽의 지도 생성/마커/팝업/영역선택을 `maplibregl.*`로 다시 짰다.
+  - 회전은 되고 틸트(3D)는 막았다(`maxPitch: 0`) — 브리프대로 평면 유지. `NavigationControl`로 확대/축소 + 회전 리셋(나침반) 버튼을 지도 우측 상단에 뒀다.
+  - Leaflet의 `L.circle`(내 위치 정확도 원, 영역 선택 원형)에 대응하는 게 없어서, 위도 보정한 다각형(`circlePolygonCoords`)을 GeoJSON `fill`+`line` 레이어로 직접 그린다. 사각형 영역 선택도 같은 방식(`rectFeature`).
+  - MapLibre는 스타일이 다 로드되기 전엔 `addSource`/`addLayer`를 못 부른다(Leaflet엔 이런 제약이 없었다) — `map.isStyleLoaded()`가 거짓이면 `renderTreasureMap`/`renderChatMap`이 `map.once("load", ...)`로 자기 자신을 다시 걸고 빠져나온다.
+  - **실사용 중 찾은 버그:** 로그인 직후(컨테이너가 막 `hidden`이 풀린 순간)나 모바일 레이아웃에서 지도를 만들면, `resize()`를 한 번 불러도 실제로 다시 그려지지 않고 흰 화면으로 남는 경우가 있었다(컨테이너 크기 자체는 맞게 읽히는데 WebGL이 다시 안 그림). `pulseResize()`를 추가해 생성 후 2초간 150ms마다 `resize()`를 계속 불러 방어한다.
+  - 이 작업 중 다른 대화창(재고 챗봇 보유기간 색상 기능)과 같은 파일(`inventory-chat.js`/`inventory.html`/`style.css`)을 동시에 편집하다가, 부분 커밋(`git commit -- <파일들>`)이 타이밍상 상대방이 막 커밋한 CSS 블록(`#holdColorBar`)을 한 번 지워버리는 사고가 있었다 — 바로 다음 커밋으로 복구했다(`1d3b630`). 기능 손상은 없었고 스타일만 잠깐 빠졌었다. 같은 파일을 여러 대화창이 동시에 크게 고칠 땐 이런 레이스가 날 수 있다는 걸 기록해둔다.
 
 **결정 사항**
 - 2026-09-17: 임시 대리점 계정(`yuwon`, `frisbee`, `jieun`)을 삭제한다. 부팅 시 `role='dealer'` 계정을 지운다.
 - 2026-09-17: 재고 업로드는 대리점 관리자/직원 누구나 가능하다. SKT 직원은 불가.
 - 2026-09-28: 직영점 등록 권한도 재고 업로드와 동일하게 맞춘다(대리점 직원 누구나, SKT는 총괄만). SKT 직원(조회 전용)은 등록 못 한다.
-- 2026-09-28: 지도 MapLibre GL 전환(회전 등, 별도 브리프의 "작업4")은 이번 세션에서 보류한다 — 벡터 타일 키(MapTiler 등) 발급이 먼저 필요해 사용자가 나중으로 미뤘다.
 - 2026-09-28: 공지사항은 SKT(총괄+직원) 작성/삭제, 로그인한 모두 읽기. 판매점(P코드) 계정이 생기는 프로젝트 3 전까지는 대리점 직원+SKT만 대상이다.
+- 2026-09-28: MapLibre 전환은 MapTiler 키 없이 OpenFreeMap(무료·키 불필요)으로 바로 진행한다 — 사용자가 이날 안에 완료를 요청, 키 발급을 기다리지 않기로 했다.
 
 **버그 이력**
 - 2026-08-28 커밋 `8af313e`에서 `_partner_upload_filter`의 `def` 줄이 지워져, 전체 대리점 패널·대표상품명 드롭다운·영역 기종별 표·실구매가 합계·챗봇 분석이 500 오류였다. 2026-09-17 복구하고 테스트를 추가했다.
@@ -213,7 +219,7 @@ webapp/
 - 상단 탭은 만들었지만 "설정" 탭은 아직이다 — 진짜 통합 설정 화면이 필요해지면(프로젝트 3 판매점 계정 등) `/inventory`와 `/admin`에 흩어진 "직영점 등록" 폼도 그리로 합칠 것.
 - 판매점(P코드) 계정이 생기면(프로젝트 3) 공지사항도 그 계정이 읽을 수 있게 데코레이터를 검토할 것 — 지금은 `require_inventory_user` 재사용이라 P코드 로그인은 아직 대상이 아니다.
 - `inventory_model_breakdown`(영역 기종별 표)도 직영점 포함 여부를 받게 하면, 직영점만 켠 채 영역을 선택했을 때 표가 비어 보이는 한계를 없앨 수 있다.
-- MapLibre GL 전환은 벡터 타일 키(MapTiler 등)가 준비되면 별도로 진행 (2026-09-28 사용자 결정, 보류).
+- MapLibre 전환은 됐지만 OpenFreeMap 스타일(liberty)을 그대로 썼다 — 브랜드 색·라벨 밀도 등 더 다듬고 싶으면 다른 OpenFreeMap 스타일(`bright`/`positron`)이나 나중에 MapTiler 키로 바꿔볼 것. `!showLabel`일 때 매장명을 보여주던 Leaflet 툴팁은 네이티브 `title` 속성(마우스 올리면 브라우저 기본 툴팁)으로 단순화했다 — 필요하면 커스텀 스타일 툴팁으로 다시 만들 수 있다.
 - 운영 서버에 모델 조회.xlsx를 아직 한 번도 안 올렸으면 펫네임 질문은 그냥 규칙 기반(SM-코드/F971류 정규식)으로만 동작한다 — 급하면 `/admin` → "재고지도 운영"에서 한 번 올려둘 것.
 - 모델 조회.xlsx가 매달 갱신될 예정이니, 실제로 한 달 뒤 재업로드가 잘 되는지(전체 교체 후 챗봇이 새 세대 펫네임을 바로 알아듣는지) 한 번 확인.
 
