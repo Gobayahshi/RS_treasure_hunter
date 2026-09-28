@@ -4,7 +4,7 @@ interpret_inventory_question()/parse_inventory_question() 은 db.py/app.py 를 �
 (웹앱 최상단 import 금지 규칙과 무관하게) 이 파일은 모듈 최상단에서 바로 import 해도 된다.
 """
 
-from inventory_chat import parse_inventory_question
+from inventory_chat import _extract_color_rules, parse_inventory_question
 from inventory_llm import _clean_keyword, interpret_inventory_question
 
 
@@ -72,3 +72,53 @@ def test_parse_inventory_question_recognizes_letter_prefixed_store_code():
     """실제 P코드는 'PE2810'처럼 P+영문자+숫자 형태가 흔한데, 숫자만 잡던 정규식이 놓치고 있었다."""
     parsed = parse_inventory_question("PE2810 재고 얼마나 있어")
     assert parsed["store_code"] == "PE2810"
+
+
+def test_extract_color_rules_parses_multiple_ranges():
+    rules = _extract_color_rules("10일 이하는 초록색, 10~20일은 노란색, 20일 이상은 빨간색으로 표시해줘")
+    assert rules == [
+        {"min": 0, "max": 10, "color": "#16a34a"},
+        {"min": 10, "max": 20, "color": "#ca8a04"},
+        {"min": 20, "max": None, "color": "#dc2626"},
+    ]
+
+
+def test_extract_color_rules_handles_exclusive_boundaries():
+    rules = _extract_color_rules("15일 미만은 파란색, 15일 초과는 빨간색으로 칠해줘")
+    assert rules == [
+        {"min": 0, "max": 14, "color": "#2563eb"},
+        {"min": 16, "max": None, "color": "#dc2626"},
+    ]
+
+
+def test_extract_color_rules_drops_clause_missing_color_or_range():
+    # 색이 없는 조각, 구간이 없는 조각은 버린다 — 임의로 추정하지 않는다.
+    assert _extract_color_rules("초록색으로 표시해줘") == []
+    assert _extract_color_rules("10일 이하는 표시해줘") == []
+
+
+def test_extract_color_rules_returns_empty_for_plain_questions():
+    assert _extract_color_rules("김포에 뭐가 있어") == []
+
+
+def test_parse_inventory_question_ignores_color_words_as_keyword():
+    """색상 요청 문장에서 '초록색' 같은 색 이름이 매장명 검색어로 새면 안 된다."""
+    parsed = parse_inventory_question("10일 이하는 초록색, 20일 이상은 빨간색으로 표시해줘")
+    assert parsed["keyword"] == ""
+
+
+def test_ask_inventory_avoids_aged_filter_from_color_boundary(server):
+    """색상 구간 경계에 쓴 "30일"이 체화(aged) 필터를 걸어 다른 구간 매장이 통째로
+    빠지면 안 된다 — "체화/오래/묵은" 같은 말이 따로 없으면 aged_only를 걸지 않는다."""
+    from db import db_session
+    from inventory_chat import ask_inventory
+
+    with db_session() as conn:
+        result = ask_inventory(
+            conn, "10일 이하는 초록색, 30일 이상은 빨간색으로 표시해줘"
+        )
+        assert result["map"]["aged_only"] is False
+        assert result["map"]["pin_color_rules"] == [
+            {"min": 0, "max": 10, "color": "#16a34a"},
+            {"min": 30, "max": None, "color": "#dc2626"},
+        ]

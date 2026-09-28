@@ -5,7 +5,7 @@ const ADMIN_TOKEN_KEY = "rs_admin_token"; // admin.js 와 공유
 let activeTokenKind = ""; // "admin" | "rep" | "" — 지금 세션이 어느 쪽 키를 쓰는지
 
 let chatMap = null;
-let chatMarkers = null;
+let chatMarkers = []; // maplibregl.Marker[]
 let chatMeMarker = null;
 let lastChatMapData = null;
 let lastChatOrigin = null;
@@ -16,8 +16,6 @@ let areaShape = null; // null | "rect" | "circle" — 지금 켜져 있거나 �
 let areaDrawing = false;
 let areaStart = null;
 let areaLast = null;
-let areaRect = null;
-let areaCircleLayer = null;
 let areaBounds = null;
 let areaCircle = null;
 let areaBoundOnce = false;
@@ -36,21 +34,24 @@ let mapModelNames = [];
 let pickedProductShorts = [];
 let pickedModelNames = [];
 let mapPinColor = "";
+let mapColorRules = []; // [{min, max, color}] — 사용자가 직접 정한 보유기간 구간별 색
 let mapAgedOnly = false;
 let catalogPicked = false;
 let mapIncludeRetail = false;
 let mapIncludePartner = true;
 let lastHqDealers = [];
 
-const FOCUS_CENTER = [37.55, 127.7];
+const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+// MapLibre는 [lng, lat] 순서를 쓴다 (Leaflet의 [lat, lng]와 반대).
+const FOCUS_CENTER = [127.7, 37.55];
 const FOCUS_ZOOM = 10;
 const FOCUS_BOUNDS = [
-  [36.85, 126.35],
-  [38.45, 129.25],
+  [126.35, 36.85],
+  [129.25, 38.45],
 ];
 const MAP_MAX_BOUNDS = [
-  [36.6, 126.05],
-  [38.7, 129.55],
+  [126.05, 36.6],
+  [129.55, 38.7],
 ];
 
 function $(id) {
@@ -283,8 +284,16 @@ function inventoryUserLabel(user) {
 }
 
 function stockPinColor(point) {
-  if (mapPinColor) return mapPinColor;
   const days = point && point.max_hold_days;
+  if (mapColorRules && mapColorRules.length) {
+    for (const rule of mapColorRules) {
+      const lo = rule.min == null ? -Infinity : rule.min;
+      const hi = rule.max == null ? Infinity : rule.max;
+      if (days != null && days >= lo && days <= hi) return rule.color;
+    }
+    // 구간 중 어디에도 안 걸리면(예: 정의 안 한 기간) 기본색으로 표시한다.
+  }
+  if (mapPinColor) return mapPinColor;
   if (days != null && days >= 30) return "#dc2626";
   if (days != null && days >= 15) return "#d97706";
   return "#2563eb";
@@ -405,18 +414,89 @@ function clusterMapPoints(points) {
   return out;
 }
 
-function stockIcon(point, nearest = false, showLabel = true) {
+function haversineDistanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// MapLibre는 Leaflet의 L.circle 같은 지오메트리 원이 없어서 다각형으로 근사한다.
+function circlePolygonCoords(lat, lng, radiusMeters, steps = 64) {
+  const R = 6371000;
+  const latRad = (lat * Math.PI) / 180;
+  const coords = [];
+  for (let i = 0; i <= steps; i++) {
+    const angle = (i / steps) * 2 * Math.PI;
+    const dx = (radiusMeters * Math.cos(angle)) / (R * Math.cos(latRad));
+    const dy = (radiusMeters * Math.sin(angle)) / R;
+    coords.push([lng + (dx * 180) / Math.PI, lat + (dy * 180) / Math.PI]);
+  }
+  return coords;
+}
+
+function circleFeature(lat, lng, radiusMeters) {
+  return {
+    type: "Feature",
+    properties: {},
+    geometry: { type: "Polygon", coordinates: [circlePolygonCoords(lat, lng, radiusMeters)] },
+  };
+}
+
+function rectFeature(startLat, startLng, endLat, endLng) {
+  const south = Math.min(startLat, endLat);
+  const north = Math.max(startLat, endLat);
+  const west = Math.min(startLng, endLng);
+  const east = Math.max(startLng, endLng);
+  return {
+    type: "Feature",
+    properties: {},
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [west, south],
+          [east, south],
+          [east, north],
+          [west, north],
+          [west, south],
+        ],
+      ],
+    },
+  };
+}
+
+// points: [lat, lng][] → MapLibre fitBounds가 쓰는 [[west,south],[east,north]]
+function boundsFromPoints(points) {
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  for (const [lat, lng] of points) {
+    west = Math.min(west, lng);
+    east = Math.max(east, lng);
+    south = Math.min(south, lat);
+    north = Math.max(north, lat);
+  }
+  return [
+    [west, south],
+    [east, north],
+  ];
+}
+
+function stockMarkerElement(point, nearest = false, showLabel = true) {
   const qty = typeof point === "number" ? point : (point && point.qty) || 0;
   const shared = point && point.shared;
   const cls = `stock-pin${nearest ? " nearest" : ""}${shared ? " shared" : ""}`;
   const caption = showLabel && typeof point === "object" && point ? storeCaptionHtml(point) : "";
-  return L.divIcon({
-    className: "stock-marker",
-    html: `<div class="stock-marker-inner"><div class="${cls}" style="background:${stockPinColor(point)}">${qty}</div>${caption ? `<div class="stock-caption">${caption}</div>` : ""}</div>`,
-    iconSize: showLabel ? [220, 36] : [32, 32],
-    iconAnchor: [16, showLabel ? 18 : 16],
-    popupAnchor: [0, -18],
-  });
+  const el = document.createElement("div");
+  el.className = "stock-marker";
+  el.innerHTML = `<div class="stock-marker-inner"><div class="${cls}" style="background:${stockPinColor(point)}">${qty}</div>${caption ? `<div class="stock-caption">${caption}</div>` : ""}</div>`;
+  return el;
 }
 
 function formatKm(meters) {
@@ -427,12 +507,13 @@ function formatKm(meters) {
 
 function fitLandscapeFocus(map) {
   if (!map) return false;
-  map.invalidateSize();
-  const size = map.getSize();
+  map.resize();
+  const el = map.getContainer();
+  const size = { x: el.clientWidth, y: el.clientHeight };
   if (!size.x || !size.y || size.x < 80 || size.y < 80) return false;
-  map.fitBounds(FOCUS_BOUNDS, { padding: [20, 20], maxZoom: 11, animate: false });
+  map.fitBounds(FOCUS_BOUNDS, { padding: 20, maxZoom: 11, animate: false });
   if (map.getZoom() < 9.5) {
-    map.setView(FOCUS_CENTER, FOCUS_ZOOM, { animate: false });
+    map.jumpTo({ center: FOCUS_CENTER, zoom: FOCUS_ZOOM });
   }
   return true;
 }
@@ -443,23 +524,50 @@ function scheduleLandscapeFocus(map, attempt = 0) {
   setTimeout(() => scheduleLandscapeFocus(map, attempt + 1), 80);
 }
 
+const AREA_SOURCE_ID = "area-shape";
+
+function ensureAreaLayer(map) {
+  if (map.getSource(AREA_SOURCE_ID)) return true;
+  if (!map.isStyleLoaded()) return false;
+  map.addSource(AREA_SOURCE_ID, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({
+    id: `${AREA_SOURCE_ID}-fill`,
+    type: "fill",
+    source: AREA_SOURCE_ID,
+    paint: { "fill-color": "#8b5cf6", "fill-opacity": 0.12 },
+  });
+  map.addLayer({
+    id: `${AREA_SOURCE_ID}-line`,
+    type: "line",
+    source: AREA_SOURCE_ID,
+    paint: { "line-color": "#7c3aed", "line-width": 2 },
+  });
+  return true;
+}
+
+function setAreaFeature(map, feature) {
+  if (!ensureAreaLayer(map)) return;
+  map.getSource(AREA_SOURCE_ID).setData({ type: "FeatureCollection", features: feature ? [feature] : [] });
+}
+
 function ensureChatMap() {
   if (chatMap) {
-    setTimeout(() => chatMap.invalidateSize(), 80);
+    setTimeout(() => chatMap.resize(), 80);
     return chatMap;
   }
-  chatMap = L.map("chatMap", {
+  chatMap = new maplibregl.Map({
+    container: "chatMap",
+    style: MAP_STYLE_URL,
+    center: FOCUS_CENTER,
+    zoom: FOCUS_ZOOM,
     minZoom: 9,
     maxZoom: 16,
-    zoomSnap: 0.25,
     maxBounds: MAP_MAX_BOUNDS,
-    maxBoundsViscosity: 1,
-    worldCopyJump: false,
-  }).setView(FOCUS_CENTER, FOCUS_ZOOM);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "&copy; OpenStreetMap",
-  }).addTo(chatMap);
-  chatMarkers = L.layerGroup().addTo(chatMap);
+    maxPitch: 0, // 평면 유지 (회전은 됨, 틸트는 안 됨)
+    attributionControl: { compact: true },
+  });
+  chatMap.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
+  chatMap.on("load", () => ensureAreaLayer(chatMap));
   chatMap.on("zoomend", () => {
     const show = chatMap.getZoom() >= 12;
     if (show !== storeLabelsOn && lastChatMapData) {
@@ -471,7 +579,7 @@ function ensureChatMap() {
   if (pane && typeof ResizeObserver !== "undefined") {
     let fitted = false;
     const ro = new ResizeObserver(() => {
-      chatMap.invalidateSize();
+      chatMap.resize();
       if (!fitted && fitLandscapeFocus(chatMap)) fitted = true;
     });
     ro.observe(pane);
@@ -492,11 +600,11 @@ function setAreaMode(on, shape = "rect") {
   circleBtn.textContent = areaShape === "circle" ? "드래그해서 반경을 그리세요" : "원형 선택";
   if (areaShape) {
     pane.classList.add("is-drawing");
-    chatMap.dragging.disable();
+    chatMap.dragPan.disable();
     chatMap.boxZoom.disable();
   } else {
     pane.classList.remove("is-drawing");
-    chatMap.dragging.enable();
+    chatMap.dragPan.enable();
     chatMap.boxZoom.enable();
   }
 }
@@ -506,14 +614,7 @@ function clearArea() {
   areaStart = null;
   areaBounds = null;
   areaCircle = null;
-  if (areaRect && chatMap) {
-    chatMap.removeLayer(areaRect);
-    areaRect = null;
-  }
-  if (areaCircleLayer && chatMap) {
-    chatMap.removeLayer(areaCircleLayer);
-    areaCircleLayer = null;
-  }
+  if (chatMap) setAreaFeature(chatMap, null);
   const clearBtn = $("areaClearBtn");
   if (clearBtn) clearBtn.classList.add("hidden");
   hideAreaTable();
@@ -526,43 +627,24 @@ function bindAreaDraw(map) {
   areaBoundOnce = true;
   map.on("mousedown", (e) => {
     if (!areaShape) return;
-    L.DomEvent.preventDefault(e.originalEvent);
+    if (e.originalEvent) e.originalEvent.preventDefault();
     areaDrawing = true;
-    areaStart = e.latlng;
-    areaLast = e.latlng;
-    // 모양을 바꿔 다시 그릴 수도 있으니 이전 도형은 종류에 상관없이 지운다.
-    if (areaRect) {
-      map.removeLayer(areaRect);
-      areaRect = null;
-    }
-    if (areaCircleLayer) {
-      map.removeLayer(areaCircleLayer);
-      areaCircleLayer = null;
-    }
+    areaStart = e.lngLat;
+    areaLast = e.lngLat;
     if (areaShape === "circle") {
-      areaCircleLayer = L.circle(areaStart, {
-        radius: 1,
-        color: "#7c3aed",
-        weight: 2,
-        fillColor: "#8b5cf6",
-        fillOpacity: 0.12,
-      }).addTo(map);
+      setAreaFeature(map, circleFeature(areaStart.lat, areaStart.lng, 1));
     } else {
-      areaRect = L.rectangle(L.latLngBounds(areaStart, areaStart), {
-        color: "#7c3aed",
-        weight: 2,
-        fillColor: "#8b5cf6",
-        fillOpacity: 0.12,
-      }).addTo(map);
+      setAreaFeature(map, rectFeature(areaStart.lat, areaStart.lng, areaStart.lat, areaStart.lng));
     }
   });
   map.on("mousemove", (e) => {
     if (!areaDrawing || !areaStart) return;
-    areaLast = e.latlng;
+    areaLast = e.lngLat;
     if (areaShape === "circle") {
-      if (areaCircleLayer) areaCircleLayer.setRadius(areaStart.distanceTo(e.latlng));
-    } else if (areaRect) {
-      areaRect.setBounds(L.latLngBounds(areaStart, e.latlng));
+      const radiusMeters = haversineDistanceMeters(areaStart.lat, areaStart.lng, e.lngLat.lat, e.lngLat.lng);
+      setAreaFeature(map, circleFeature(areaStart.lat, areaStart.lng, radiusMeters));
+    } else {
+      setAreaFeature(map, rectFeature(areaStart.lat, areaStart.lng, e.lngLat.lat, e.lngLat.lng));
     }
   });
   const finish = () => {
@@ -570,13 +652,13 @@ function bindAreaDraw(map) {
     areaDrawing = false;
     const end = areaLast || areaStart;
     if (areaShape === "circle") {
-      if (!areaCircleLayer) return;
-      const radiusMeters = areaStart.distanceTo(end);
-      areaCircleLayer.setRadius(radiusMeters);
+      const radiusMeters = haversineDistanceMeters(areaStart.lat, areaStart.lng, end.lat, end.lng);
       if (radiusMeters < 30) {
         setAreaMode(false);
+        setAreaFeature(map, null);
         return;
       }
+      setAreaFeature(map, circleFeature(areaStart.lat, areaStart.lng, radiusMeters));
       areaCircle = { lat: areaStart.lat, lng: areaStart.lng, radius_km: radiusMeters / 1000 };
       areaBounds = null;
       setAreaMode(false);
@@ -585,19 +667,17 @@ function bindAreaDraw(map) {
       applyAreaCircle(areaCircle);
       return;
     }
-    if (!areaRect) return;
-    areaRect.setBounds(L.latLngBounds(areaStart, end));
-    const b = areaRect.getBounds();
-    if (b.getSouth() === b.getNorth() || b.getWest() === b.getEast()) {
+    const south = Math.min(areaStart.lat, end.lat);
+    const north = Math.max(areaStart.lat, end.lat);
+    const west = Math.min(areaStart.lng, end.lng);
+    const east = Math.max(areaStart.lng, end.lng);
+    if (south === north || west === east) {
       setAreaMode(false);
+      setAreaFeature(map, null);
       return;
     }
-    areaBounds = {
-      south: b.getSouth(),
-      west: b.getWest(),
-      north: b.getNorth(),
-      east: b.getEast(),
-    };
+    setAreaFeature(map, rectFeature(areaStart.lat, areaStart.lng, end.lat, end.lng));
+    areaBounds = { south, west, north, east };
     areaCircle = null;
     setAreaMode(false);
     const clearBtn = $("areaClearBtn");
@@ -613,7 +693,7 @@ function hideAreaTable() {
   const pane = document.querySelector(".inventory-map-pane");
   if (wrap) wrap.classList.add("hidden");
   if (pane) pane.classList.remove("has-area-table");
-  if (chatMap) setTimeout(() => chatMap.invalidateSize(), 80);
+  if (chatMap) setTimeout(() => chatMap.resize(), 80);
 }
 
 function renderAreaTable(data) {
@@ -646,7 +726,7 @@ function renderAreaTable(data) {
   }
   wrap.classList.remove("hidden");
   if (pane) pane.classList.add("has-area-table");
-  if (chatMap) setTimeout(() => chatMap.invalidateSize(), 80);
+  if (chatMap) setTimeout(() => chatMap.resize(), 80);
 }
 
 async function applyAreaBounds(bbox) {
@@ -701,12 +781,17 @@ function modelsTableHtml(models) {
 
 function renderChatMap(data, origin, keepView = false) {
   const map = ensureChatMap();
-  if (!map || !chatMarkers) return;
+  if (!map) return;
+  if (!map.isStyleLoaded()) {
+    map.once("load", () => renderChatMap(data, origin, keepView));
+    return;
+  }
   lastChatMapData = data;
   lastChatOrigin = origin;
-  chatMarkers.clearLayers();
+  chatMarkers.forEach((m) => m.remove());
+  chatMarkers = [];
   if (chatMeMarker) {
-    map.removeLayer(chatMeMarker);
+    chatMeMarker.remove();
     chatMeMarker = null;
   }
   const points = clusterMapPoints((data && data.points) || []);
@@ -718,7 +803,6 @@ function renderChatMap(data, origin, keepView = false) {
   for (const p of points) {
     if (p.lat == null || p.lng == null) continue;
     const isNearest = nearestCode && (p.stores || []).some((s) => s.store_code === nearestCode);
-    const marker = L.marker([p.lat, p.lng], { icon: stockIcon(p, isNearest, showLabel) });
     const dist = p.distance_meters != null ? `<div class="distance">${formatKm(p.distance_meters)}</div>` : "";
     const dealers = (p.dealers || []).map((d) => `${escHtml(d.dealer_name)} ${d.qty}대`).join(" · ");
     const storeRows = (p.stores || [p])
@@ -730,36 +814,35 @@ function renderChatMap(data, origin, keepView = false) {
       })
       .join("");
     const addr = [p.address, p.detail_address].filter(Boolean).join(" ");
-    marker.bindPopup(
+    const popup = new maplibregl.Popup({ maxWidth: "360px", offset: 18 }).setHTML(
       `<div class="map-popup">
       <div class="store-list">${storeRows}</div>
       <div class="distance">${p.qty}대${p.aged_qty ? ` · 30일+ ${p.aged_qty}대` : ""}</div>
       ${modelsTableHtml(p.models)}
       ${dealers ? `<div class="muted small">${dealers}</div>` : ""}${dist}
-      ${addr ? `<div class="muted small store-address">${escHtml(addr)}</div>` : ""}</div>`,
-      { maxWidth: 360, minWidth: 240 }
+      ${addr ? `<div class="muted small store-address">${escHtml(addr)}</div>` : ""}</div>`
     );
-    if (!showLabel) {
-      marker.bindTooltip(storeCaptionText(p), { direction: "right", offset: [16, 0], opacity: 0.95 });
-    }
-    marker.addTo(chatMarkers);
+    const el = stockMarkerElement(p, isNearest, showLabel);
+    if (!showLabel) el.title = storeCaptionText(p);
+    const marker = new maplibregl.Marker({ element: el, anchor: "left", offset: [6, 0] })
+      .setLngLat([p.lng, p.lat])
+      .setPopup(popup)
+      .addTo(map);
+    chatMarkers.push(marker);
     bounds.push([p.lat, p.lng]);
     if (isNearest) nearestMarker = marker;
   }
   if (origin) {
-    chatMeMarker = L.circleMarker([origin.lat, origin.lng], {
-      radius: 8,
-      color: "#1d4ed8",
-      weight: 2,
-      fillColor: "#3b82f6",
-      fillOpacity: 0.95,
-    })
-      .bindPopup("내 위치")
+    const dot = document.createElement("div");
+    dot.className = "me-dot";
+    chatMeMarker = new maplibregl.Marker({ element: dot })
+      .setLngLat([origin.lng, origin.lat])
+      .setPopup(new maplibregl.Popup({ offset: 12 }).setText("내 위치"))
       .addTo(map);
     bounds.push([origin.lat, origin.lng]);
   }
   if (keepView) {
-    setTimeout(() => map.invalidateSize(), 80);
+    setTimeout(() => map.resize(), 80);
     return;
   }
   fitChatMap(map, bounds, origin, nearestMarker, data);
@@ -767,19 +850,19 @@ function renderChatMap(data, origin, keepView = false) {
 
 function fitChatMap(map, bounds, origin, nearestMarker, data) {
   if (origin && bounds.length) {
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
-    if (nearestMarker) nearestMarker.openPopup();
+    map.fitBounds(boundsFromPoints(bounds), { padding: 40, maxZoom: 14 });
+    if (nearestMarker) nearestMarker.togglePopup();
   } else if (nearestMarker && data && data.nearest) {
-    map.setView([data.nearest.lat, data.nearest.lng], 14);
-    nearestMarker.openPopup();
+    map.jumpTo({ center: [data.nearest.lng, data.nearest.lat], zoom: 14 });
+    nearestMarker.togglePopup();
   } else if (bounds.length === 1) {
-    map.setView(bounds[0], 14);
+    map.jumpTo({ center: [bounds[0][1], bounds[0][0]], zoom: 14 });
   } else if (bounds.length > 1 && data && data.dealer_id) {
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
+    map.fitBounds(boundsFromPoints(bounds), { padding: 40, maxZoom: 13 });
   } else {
     fitLandscapeFocus(map);
   }
-  setTimeout(() => map.invalidateSize(), 80);
+  setTimeout(() => map.resize(), 80);
 }
 
 function addBubble(role, text, tables) {
@@ -1231,6 +1314,8 @@ function applyMapMeta(data) {
   if (Object.prototype.hasOwnProperty.call(data, "aged_only")) {
     mapAgedOnly = !!data.aged_only;
   }
+  // 구간별 색상은 채팅으로만 정한다 — 조회 버튼으로 직접 지도를 불러오면 초기화한다.
+  mapColorRules = [];
   if (data.as_of_date || (data.uploads && data.uploads.length)) renderAsOf(data);
 }
 
@@ -1489,6 +1574,7 @@ function toggleMultiPick(menuId) {
 
 function resetMapStyle() {
   mapPinColor = "";
+  mapColorRules = [];
   mapAgedOnly = false;
 }
 
@@ -1728,6 +1814,7 @@ async function sendQuestion(text, coords) {
     addBot(data.answer || "답을 만들지 못했습니다.", data.tables);
     if (data.map) {
       mapPinColor = data.map.pin_color || "";
+      mapColorRules = data.map.pin_color_rules || [];
       mapAgedOnly = !!data.map.aged_only;
       renderChatMap(data.map, coords || null);
       if (areaBounds || (data.map && data.map.bbox)) renderAreaTable(data.map);

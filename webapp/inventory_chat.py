@@ -127,6 +127,59 @@ def _extract_pin_color(text: str) -> str:
     return ranked[0][1]
 
 
+_COLOR_RULE_CLAUSE_RE = re.compile(r"[,，]|그리고|(?<=\S)이고(?=\s)")
+_DAY_RANGE_RE = re.compile(r"(\d+)\s*(?:일)?\s*(?:[~\-]|부터)\s*(\d+)\s*일")
+_DAY_MAX_RE = re.compile(r"(\d+)\s*일\s*(이하|미만|이내|까지)")
+_DAY_MIN_RE = re.compile(r"(\d+)\s*일\s*(이상|초과)")
+
+
+def _extract_color_rules(text: str) -> list[dict]:
+    """"10일 이하는 초록색, 10~20일은 노란색, 20일 이상은 빨간색으로 표시해줘" 처럼
+    사용자가 직접 정한 보유기간 구간별 색을 [{min, max, color}, ...] 로 뽑는다.
+
+    쉼표·"그리고"로 나눈 조각마다 구간과 색을 하나씩 찾는다. 구간이나 색 중 하나라도
+    없는 조각은 버린다 — 애매한 값으로 임의로 추정하지 않는다. max=None 이면 그 이상은
+    다 포함(상한 없음)이라는 뜻이다.
+    """
+    rules: list[dict] = []
+    for clause in _COLOR_RULE_CLAUSE_RE.split(text or ""):
+        color = _extract_pin_color(clause)
+        if not color:
+            continue
+        m = _DAY_RANGE_RE.search(clause)
+        if m:
+            lo, hi = sorted((int(m.group(1)), int(m.group(2))))
+            rules.append({"min": lo, "max": hi, "color": color})
+            continue
+        m = _DAY_MAX_RE.search(clause)
+        if m:
+            n = int(m.group(1))
+            hi = n - 1 if m.group(2) == "미만" else n
+            rules.append({"min": 0, "max": max(hi, 0), "color": color})
+            continue
+        m = _DAY_MIN_RE.search(clause)
+        if m:
+            n = int(m.group(1))
+            lo = n + 1 if m.group(2) == "초과" else n
+            rules.append({"min": lo, "max": None, "color": color})
+            continue
+    return rules
+
+
+def _color_rules_bit(rules: list[dict]) -> str:
+    if not rules:
+        return ""
+    parts = []
+    for r in rules:
+        if r.get("max") is None:
+            parts.append(f"{r['min']}일 이상 {r['color']}")
+        elif r.get("min") == 0:
+            parts.append(f"{r['max']}일 이하 {r['color']}")
+        else:
+            parts.append(f"{r['min']}~{r['max']}일 {r['color']}")
+    return " 요청하신 구간별 색상으로 지도에 표시했습니다: " + ", ".join(parts) + "."
+
+
 def _extract_region(text: str) -> str:
     compact = _compact(text)
     # 긴 이름 우선
@@ -232,7 +285,21 @@ def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None
         "에서",
         "하고",
         "랑",
+        # 색상 요청("10일 이하는 초록색으로")에서 색 이름·구간 연결어가 지명으로 오인되지 않게.
+        "이하",
+        "이상",
+        "미만",
+        "초과",
+        "이내",
+        "까지",
+        "부터",
+        "구간",
+        "표시해",
+        "칠해",
+        "칠해줘",
+        "표시",
     ]
+    drop.extend(word for word, _ in _PIN_COLORS)
     for word in extra_drop or []:
         if word:
             drop.append(word)
@@ -240,7 +307,8 @@ def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None
         if word:
             cleaned = cleaned.replace(word, " ")
     cleaned = re.sub(r"[^0-9A-Za-z가-힣\s]", " ", cleaned)
-    tokens = [t for t in cleaned.split() if len(t) >= 2]
+    # "10일"처럼 순수 숫자(+일)만 남은 토큰은 지명·매장명일 수 없다 (색상 구간 경계 등).
+    tokens = [t for t in cleaned.split() if len(t) >= 2 and not re.fullmatch(r"\d+일?", t)]
     if not tokens:
         return ""
     tokens.sort(key=len, reverse=True)
@@ -420,13 +488,24 @@ def ask_inventory(
                     parsed["model"] = rules.get("model") or "ALL"
     if not parsed:
         parsed = rules
-    color = _extract_pin_color(text)
-    if color:
-        parsed["pin_color"] = color
-        compact = _compact(text)
-        if any(h in compact for h in AGED_HINTS) or any(h in compact for h in COLOR_HINTS):
-            if any(h in compact for h in AGED_HINTS):
-                parsed["aged_only"] = True
+    color_rules = _extract_color_rules(text)
+    if color_rules:
+        parsed["pin_color_rules"] = color_rules
+        # "30일 이상은 빨간색"처럼 구간 경계에 쓴 "30일"이 AGED_HINTS와 우연히 겹쳐
+        # aged_only 필터가 걸리면, 다른 구간(예: 10~20일) 매장이 지도에서 통째로 빠진다.
+        # "체화/오래/묵은"처럼 정말 체화 재고만 보겠다는 말이 따로 없으면 필터는 걸지 않는다.
+        explicit_aged_words = ("오래", "묵은", "체화", "장기보유", "장기 보유", "보유기간", "출고된지")
+        if parsed.get("intent") == "aged" and not any(w in text for w in explicit_aged_words):
+            parsed["intent"] = "analyze" if (dealer_id or parsed.get("dealer_id")) else "total"
+            parsed["aged_only"] = False
+    else:
+        color = _extract_pin_color(text)
+        if color:
+            parsed["pin_color"] = color
+            compact = _compact(text)
+            if any(h in compact for h in AGED_HINTS) or any(h in compact for h in COLOR_HINTS):
+                if any(h in compact for h in AGED_HINTS):
+                    parsed["aged_only"] = True
     parsed["nlu"] = nlu
     if dealer_id:
         scoped = next((d for d in all_dealers if d["id"] == dealer_id), None)
@@ -572,6 +651,7 @@ def _answer_from_parsed(
     keyword = parsed.get("keyword") or parsed.get("store_code") or ""
     aged_only = bool(parsed.get("aged_only"))
     pin_color = (parsed.get("pin_color") or "").strip()
+    pin_color_rules = parsed.get("pin_color_rules") or []
 
     if intent == "price":
         code = (parsed.get("store_code") or keyword or "").strip().upper()
@@ -583,6 +663,7 @@ def _answer_from_parsed(
             dealer_id=dealer_id,
             pin_color=pin_color,
         )
+        data["pin_color_rules"] = pin_color_rules
         dealer_scope = f"{parsed['dealer_name']} " if parsed.get("dealer_name") else ""
         as_of = _as_of(data)
         as_of_bit = f" 기준일은 {as_of}입니다." if as_of else ""
@@ -612,6 +693,7 @@ def _answer_from_parsed(
         aged_only=aged_only,
         pin_color=pin_color,
     )
+    data["pin_color_rules"] = pin_color_rules
     overview = {}
     all_models: list[dict] = []
     if intent in {"analyze", "compare", "total", "bbox"}:
@@ -831,7 +913,9 @@ def _model_scope(model: str) -> str:
 def _pack(intent: str, model: str, answer: str, data: dict, overview: dict, parsed: dict | None = None) -> dict:
     tables = _build_tables(intent, parsed or {}, data or {}, overview or {})
     extra = ""
-    if parsed and parsed.get("pin_color"):
+    if parsed and parsed.get("pin_color_rules"):
+        extra = _color_rules_bit(parsed["pin_color_rules"])
+    elif parsed and parsed.get("pin_color"):
         if parsed.get("aged_only"):
             extra = " 보유 30일 이상인 판매점을 요청하신 색으로 지도에 표시했습니다."
         else:
