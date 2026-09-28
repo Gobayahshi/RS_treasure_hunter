@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS inventory_items (
     holder_type TEXT NOT NULL,
     product_short TEXT,
     model_name TEXT,
+    color TEXT,
     purchase_price TEXT,
     inbound_date TEXT,
     moved_date TEXT,
@@ -420,6 +421,11 @@ def migrate_schema(conn) -> None:
             if cols and col not in cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_inventory_dealer ON inventory_items(dealer_id)")
+
+    # 재고 엑셀 R열(색상). 대표상품명/모델명 드롭다운과 같은 방식으로 필터링에 쓴다.
+    inventory_items_cols = _columns(conn, "inventory_items")
+    if inventory_items_cols and "color" not in inventory_items_cols:
+        conn.execute("ALTER TABLE inventory_items ADD COLUMN color TEXT")
 
     frisbee = conn.execute("SELECT * FROM dealers WHERE dealer_code = 'D15051'").fetchone()
     if frisbee:

@@ -33,6 +33,8 @@ let mapProductShorts = [];
 let mapModelNames = [];
 let pickedProductShorts = [];
 let pickedModelNames = [];
+let mapColors = []; // 선택한 재고 색상(엑셀 R열) — 위 pin 색상(mapColorRules)과는 다른 개념
+let pickedColors = [];
 let mapPinColor = "";
 let mapColorRules = []; // [{min, max, color}] — 채팅으로 즉석에서 정한 구간별 색 (임시, 한 번만 적용)
 let mapAgedOnly = false;
@@ -1373,6 +1375,7 @@ function mapQueryParams(coords) {
   const params = new URLSearchParams();
   for (const value of mapProductShorts) params.append("product_short", value);
   for (const value of mapModelNames) params.append("model_name", value);
+  for (const value of mapColors) params.append("color", value);
   if (!mapProductShorts.length && !mapModelNames.length) params.set("model", "ALL");
   if (mapAgedOnly) params.set("aged_only", "1");
   if (mapPinColor) params.set("pin_color", mapPinColor);
@@ -1567,6 +1570,7 @@ function fillModelSelect() {
   if (!models.length) {
     pickedModelNames = [];
     updateMultiPickLabel("modelNameBtn", [], "대표상품 먼저");
+    fillColorSelect();
     return;
   }
   const search = document.createElement("input");
@@ -1598,6 +1602,7 @@ function fillModelSelect() {
   filterPickMenu(menu);
   pickedModelNames = pickedModelNames.filter((v) => models.some((m) => m.model_name === v));
   updateMultiPickLabel("modelNameBtn", pickedModelNames, "해당 기종 전체");
+  fillColorSelect();
 }
 
 function updateMultiPickLabel(btnId, values, emptyText) {
@@ -1669,11 +1674,84 @@ function onProductShortChange() {
 function onModelNameChange() {
   pickedModelNames = readChecked("modelNameMenu");
   updateMultiPickLabel("modelNameBtn", pickedModelNames, "해당 기종 전체");
+  fillColorSelect();
+}
+
+function selectedModelColors() {
+  const products = pickedProductShorts.length
+    ? modelCatalog.filter((p) => pickedProductShorts.includes(p.product_short))
+    : [];
+  const wantedModels = pickedModelNames.length ? new Set(pickedModelNames) : null;
+  const merged = new Map();
+  for (const p of products) {
+    for (const m of p.models || []) {
+      if (wantedModels && !wantedModels.has(m.model_name)) continue;
+      for (const c of m.colors || []) {
+        const prev = merged.get(c.color) || { color: c.color, qty: 0 };
+        prev.qty += c.qty || 0;
+        merged.set(c.color, prev);
+      }
+    }
+  }
+  return [...merged.values()].sort(
+    (a, b) => b.qty - a.qty || String(a.color || "").localeCompare(String(b.color || ""), "ko", { numeric: true, sensitivity: "base" })
+  );
+}
+
+function fillColorSelect() {
+  const menu = $("colorNameMenu");
+  const btn = $("colorNameBtn");
+  if (!menu || !btn) return;
+  const colors = pickedModelNames.length ? selectedModelColors() : [];
+  const keep = new Set(pickedColors);
+  const prevQuery = (menu.querySelector(".multi-pick-search") || {}).value || "";
+  menu.innerHTML = "";
+  btn.disabled = !colors.length;
+  if (!colors.length) {
+    pickedColors = [];
+    updateMultiPickLabel("colorNameBtn", [], pickedModelNames.length ? "색상 정보 없음" : "모델명 먼저");
+    return;
+  }
+  const search = document.createElement("input");
+  search.placeholder = "색상 검색";
+  search.value = prevQuery;
+  bindMenuSearch(search, () => filterPickMenu(menu));
+  menu.appendChild(search);
+  for (const c of colors) {
+    const label = document.createElement("label");
+    label.className = "multi-pick-item";
+    label.dataset.search = c.color || "";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = c.color;
+    box.checked = keep.has(c.color);
+    const qty = Number(c.qty || 0).toLocaleString("ko-KR");
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(` ${c.color} `));
+    const meta = document.createElement("span");
+    meta.className = "muted";
+    meta.textContent = `${qty}대`;
+    label.appendChild(meta);
+    menu.appendChild(label);
+  }
+  const empty = document.createElement("div");
+  empty.className = "multi-pick-empty muted small hidden";
+  empty.textContent = "검색 결과가 없습니다.";
+  menu.appendChild(empty);
+  filterPickMenu(menu);
+  pickedColors = pickedColors.filter((v) => colors.some((c) => c.color === v));
+  updateMultiPickLabel("colorNameBtn", pickedColors, "전체 색상");
+}
+
+function onColorChange() {
+  pickedColors = readChecked("colorNameMenu");
+  updateMultiPickLabel("colorNameBtn", pickedColors, "전체 색상");
 }
 
 function applyMapLookup() {
   mapProductShorts = pickedProductShorts.slice();
   mapModelNames = pickedModelNames.slice();
+  mapColors = pickedColors.slice();
   catalogPicked = true;
   resetMapStyle();
   closeMultiPickMenus("");
@@ -2011,6 +2089,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (holdColorSaveBtn) holdColorSaveBtn.addEventListener("click", handleHoldColorSave);
   const productBtn = $("productShortBtn");
   const modelBtn = $("modelNameBtn");
+  const colorBtn = $("colorNameBtn");
   if (productBtn) productBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleMultiPick("productShortMenu");
@@ -2020,8 +2099,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (modelBtn.disabled) return;
     toggleMultiPick("modelNameMenu");
   });
+  if (colorBtn) colorBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (colorBtn.disabled) return;
+    toggleMultiPick("colorNameMenu");
+  });
   const productMenu = $("productShortMenu");
   const modelMenu = $("modelNameMenu");
+  const colorMenu = $("colorNameMenu");
   if (productMenu) {
     productMenu.addEventListener("click", (e) => e.stopPropagation());
     productMenu.addEventListener("change", (e) => {
@@ -2034,6 +2119,13 @@ document.addEventListener("DOMContentLoaded", () => {
     modelMenu.addEventListener("change", (e) => {
       if (e.target && e.target.classList.contains("multi-pick-search")) return;
       onModelNameChange();
+    });
+  }
+  if (colorMenu) {
+    colorMenu.addEventListener("click", (e) => e.stopPropagation());
+    colorMenu.addEventListener("change", (e) => {
+      if (e.target && e.target.classList.contains("multi-pick-search")) return;
+      onColorChange();
     });
   }
   document.addEventListener("click", () => closeMultiPickMenus(""));

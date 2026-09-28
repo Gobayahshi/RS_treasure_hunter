@@ -19,6 +19,7 @@ HOLDER_CODE_ALIASES = {"보유처매장코드", "판매점코드", "매장코드
 HOLDER_NAME_ALIASES = {"보유처", "판매점명", "매장명"}
 PRODUCT_SHORT_ALIASES = {"대표상품명", "대표모델명"}
 MODEL_ALIASES = {"모델명"}
+COLOR_ALIASES = {"색상"}
 PRICE_ALIASES = {"실구매가", "구매가격"}
 INBOUND_ALIASES = {"입고일자"}
 MOVED_ALIASES = {"재고이동출고일자"}
@@ -172,6 +173,7 @@ def _item_from_raw(raw: dict[str, str]) -> dict[str, str] | None:
         "holder_type": classify_holder(store_code),
         "product_short": _pick(raw, PRODUCT_SHORT_ALIASES),
         "model_name": _pick(raw, MODEL_ALIASES),
+        "color": _pick(raw, COLOR_ALIASES),
         "purchase_price": _pick(raw, PRICE_ALIASES),
         "inbound_date": _pick(raw, INBOUND_ALIASES)[:10],
         "moved_date": _pick(raw, MOVED_ALIASES)[:10],
@@ -388,9 +390,9 @@ def replace_inventory(conn, parsed: dict[str, Any], now_iso: str, new_id, dealer
         """
         INSERT INTO inventory_items (
             id, upload_id, store_code, holder_name, holder_type,
-            product_short, model_name, purchase_price, inbound_date,
+            product_short, model_name, color, purchase_price, inbound_date,
             moved_date, hold_days, serial, dealer_id, dealer_code, dealer_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -401,6 +403,7 @@ def replace_inventory(conn, parsed: dict[str, Any], now_iso: str, new_id, dealer
                 row["holder_type"],
                 row["product_short"],
                 row["model_name"],
+                row.get("color") or "",
                 row["purchase_price"],
                 row["inbound_date"],
                 row["moved_date"],
@@ -503,6 +506,7 @@ def _empty_map(
         "dealer_id": dealer_id,
         "product_short": "",
         "model_name": "",
+        "item_color": "",
         "pin_color": "",
         "color_mode": "hold",
         "total_qty": 0,
@@ -733,10 +737,12 @@ def inventory_map_points(
     radius_km: float | None = None,
     product_short: str | None = None,
     model_name: str | None = None,
+    color: str | None = None,
     pin_color: str | None = None,
 ) -> dict:
     wanted_shorts = _values_list(product_short)
     wanted_model_names = _values_list(model_name)
+    wanted_colors = _values_list(color)
     models = [] if (wanted_shorts or wanted_model_names) else parse_models(model_prefix)
     if wanted_model_names:
         model = ",".join(wanted_model_names)
@@ -800,6 +806,14 @@ def inventory_map_points(
     else:
         model_key_expr = "UPPER(COALESCE(NULLIF(TRIM(i.product_short), ''), TRIM(i.model_name), ''))"
         model_filter_sql = ""
+
+    color_filter_sql = ""
+    color_params: list = []
+    if wanted_colors:
+        ph = ",".join("?" * len(wanted_colors))
+        color_filter_sql = f"AND UPPER(TRIM(COALESCE(i.color, ''))) IN ({ph})"
+        color_params = [c.upper() for c in wanted_colors]
+
     rows = conn.execute(
         f"""
         SELECT
@@ -824,10 +838,11 @@ def inventory_map_points(
         WHERE i.upload_id IN ({up_ph})
           AND i.holder_type IN ({placeholders})
           {model_filter_sql}
+          {color_filter_sql}
         GROUP BY i.store_code, i.dealer_id, model_key
         { "HAVING aged_qty > 0" if aged_only else "" }
         """,
-        (*case_params, AGED_DAYS, *upload_ids, *holders, *model_params),
+        (*case_params, AGED_DAYS, *upload_ids, *holders, *model_params, *color_params),
     ).fetchall()
 
     merged = _merge_store_rows(rows)
@@ -929,6 +944,7 @@ def inventory_map_points(
         "models": models,
         "product_short": ",".join(wanted_shorts),
         "model_name": ",".join(wanted_model_names),
+        "item_color": ",".join(wanted_colors),
         "pin_color": (pin_color or "").strip(),
         "color_mode": "custom" if (pin_color or "").strip() else "hold",
         "model_totals": [model_totals[name] for name in models if name in model_totals],
@@ -1127,12 +1143,14 @@ def inventory_model_catalog(conn, dealer_id: str | None = None) -> dict:
         SELECT
             COALESCE(NULLIF(TRIM(i.product_short), ''), '미상') AS product_short,
             COALESCE(NULLIF(TRIM(i.model_name), ''), COALESCE(NULLIF(TRIM(i.product_short), ''), '미상')) AS model_name,
+            NULLIF(TRIM(i.color), '') AS color,
             COUNT(*) AS qty
         FROM inventory_items i
         WHERE i.upload_id IN ({up_ph})
           AND i.holder_type = 'partner'
         GROUP BY COALESCE(NULLIF(TRIM(i.product_short), ''), '미상'),
-                 COALESCE(NULLIF(TRIM(i.model_name), ''), COALESCE(NULLIF(TRIM(i.product_short), ''), '미상'))
+                 COALESCE(NULLIF(TRIM(i.model_name), ''), COALESCE(NULLIF(TRIM(i.product_short), ''), '미상')),
+                 NULLIF(TRIM(i.color), '')
         ORDER BY qty DESC, product_short, model_name
         """,
         upload_ids,
@@ -1142,14 +1160,23 @@ def inventory_model_catalog(conn, dealer_id: str | None = None) -> dict:
         short = row["product_short"] or "미상"
         item = products.get(short)
         if not item:
-            item = {"product_short": short, "qty": 0, "models": []}
+            item = {"product_short": short, "qty": 0, "models": {}}
             products[short] = item
         qty = int(row["qty"] or 0)
         item["qty"] += qty
-        item["models"].append({"model_name": row["model_name"] or short, "qty": qty})
+        model_name = row["model_name"] or short
+        model = item["models"].get(model_name)
+        if not model:
+            model = {"model_name": model_name, "qty": 0, "colors": []}
+            item["models"][model_name] = model
+        model["qty"] += qty
+        if row["color"]:
+            model["colors"].append({"color": row["color"], "qty": qty})
     catalog = sorted(products.values(), key=lambda p: (-p["qty"], p["product_short"]))
     for item in catalog:
-        item["models"].sort(key=lambda m: (-m["qty"], m["model_name"]))
+        item["models"] = sorted(item["models"].values(), key=lambda m: (-m["qty"], m["model_name"]))
+        for model in item["models"]:
+            model["colors"].sort(key=lambda c: (-c["qty"], c["color"]))
     return {
         "as_of_date": ",".join(as_of_dates),
         "uploads": uploads,
