@@ -181,6 +181,16 @@ CREATE TABLE IF NOT EXISTS model_lookup (
 );
 CREATE INDEX IF NOT EXISTS idx_model_lookup_canonical ON model_lookup(canonical_model);
 
+CREATE TABLE IF NOT EXISTS notices (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    author_name TEXT,
+    author_role TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notices_created ON notices(created_at);
+
 -- 판매점이 수천 건이라 주변 검색/스폰에 필요한 인덱스를 둔다.
 CREATE INDEX IF NOT EXISTS idx_stores_latlng ON stores(lat, lng);
 CREATE INDEX IF NOT EXISTS idx_stores_address ON stores(address);

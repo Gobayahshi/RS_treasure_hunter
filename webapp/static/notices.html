@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>공지사항 - RS-Treasure</title>
+<link rel="stylesheet" href="css/style.css?v=20260928a" />
+</head>
+<body class="admin-page notices-page">
+
+<nav class="app-tabs" aria-label="화면 전환">
+  <a href="/">🏆 보물찾기</a>
+  <a href="/inventory">📦 재고Map</a>
+  <a href="/notices" class="active">📢 공지사항</a>
+</nav>
+
+<header class="topbar">
+  <span class="brand">📢 공지사항</span>
+  <nav id="noticeNav" class="hidden">
+    <span id="noticeUser" class="muted small"></span>
+    <button id="noticeLogoutBtn">로그아웃</button>
+  </nav>
+</header>
+
+<main>
+  <section id="screen-notice-login" class="screen">
+    <div class="card center-card">
+      <h1>공지사항</h1>
+      <p class="muted">보물찾기·재고Map과 같은 계정으로 로그인하세요.</p>
+      <input id="noticeUsername" type="text" placeholder="사원 고유ID (SKT는 관리자 아이디)" autocomplete="username" />
+      <input id="noticePassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
+      <button type="button" id="noticeLoginBtn" class="btn-primary">시작하기</button>
+      <p id="noticeLoginError" class="error hidden"></p>
+    </div>
+  </section>
+
+  <section id="screen-notice-password" class="screen hidden">
+    <div class="card center-card">
+      <h1>비밀번호 변경</h1>
+      <p class="muted">초기 비밀번호를 사용 중입니다. 새 비밀번호를 정해야 계속 쓸 수 있습니다.</p>
+      <input id="noticeCurrentPassword" type="password" placeholder="현재 비밀번호" autocomplete="current-password" />
+      <input id="noticeNewPassword" type="password" placeholder="새 비밀번호 (4자 이상)" autocomplete="new-password" />
+      <input id="noticeNewPasswordConfirm" type="password" placeholder="새 비밀번호 확인" autocomplete="new-password" />
+      <button type="button" id="noticeChangePasswordBtn" class="btn-primary">변경하고 시작하기</button>
+      <p id="noticePasswordMessage" class="muted small"></p>
+    </div>
+  </section>
+
+  <div id="notice-app" class="hidden">
+    <section class="screen">
+      <div class="between">
+        <h2>공지사항</h2>
+        <div>
+          <button type="button" id="newNoticeBtn" class="btn-secondary hidden">새 공지</button>
+        </div>
+      </div>
+      <div id="noticeList" class="list"></div>
+    </section>
+  </div>
+</main>
+
+<div id="noticeFormModal" class="modal-overlay hidden">
+  <div class="modal-box card">
+    <div class="between">
+      <h2>새 공지</h2>
+      <button type="button" id="noticeFormCloseBtn" class="link-btn">닫기</button>
+    </div>
+    <input id="noticeTitleInput" type="text" placeholder="제목" autocomplete="off" />
+    <textarea id="noticeBodyInput" rows="8" placeholder="내용"></textarea>
+    <button type="button" id="noticeSubmitBtn" class="btn-primary">올리기</button>
+    <p id="noticeFormMessage" class="muted small"></p>
+  </div>
+</div>
+
+<script src="js/notices.js?v=20260928a"></script>
+</body>
+</html>

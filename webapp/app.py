@@ -823,6 +823,11 @@ def inventory_page():
     return _page_response("inventory.html", "js/inventory-chat.js")
 
 
+@app.route("/notices")
+def notices_page():
+    return _page_response("notices.html", "js/notices.js")
+
+
 # ---------------------------------------------------------------------------
 # 헬스체크
 # ---------------------------------------------------------------------------
@@ -2942,6 +2947,60 @@ def geocode_status():
             "log": log_status,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# 공지사항 - SKT 직원/총괄만 작성, 로그인한 모두 읽는다
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/notices")
+@require_inventory_user
+def list_notices():
+    # 읽기는 대리점 직원/SKT 누구나 되어야 하는데, 그런 범용 로그인 확인 데코레이터가
+    # require_inventory_user 뿐이라 그대로 재사용한다(새 데코레이터를 만들지 않는다).
+    with db_session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM notices ORDER BY created_at DESC"
+        ).fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@app.route("/api/notices", methods=["POST"])
+@require_skt
+def create_notice():
+    body = request.get_json(force=True, silent=True) or {}
+    title = (body.get("title") or "").strip()
+    text = (body.get("body") or "").strip()
+    if not title or not text:
+        return jsonify({"error": "MISSING_FIELDS", "message": "제목과 내용을 입력하세요."}), 400
+    admin = g.admin
+    notice_id = new_id()
+    with db_session() as conn:
+        conn.execute(
+            """
+            INSERT INTO notices (id, title, body, author_name, author_role, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                notice_id,
+                title,
+                text,
+                admin.get("name") or admin.get("username") or "",
+                admin.get("role") or "",
+                now_iso(),
+            ),
+        )
+        row = conn.execute("SELECT * FROM notices WHERE id = ?", (notice_id,)).fetchone()
+    return jsonify(row_to_dict(row)), 201
+
+
+@app.route("/api/notices/<notice_id>", methods=["DELETE"])
+@require_skt
+def delete_notice(notice_id):
+    with db_session() as conn:
+        conn.execute("DELETE FROM notices WHERE id = ?", (notice_id,))
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
