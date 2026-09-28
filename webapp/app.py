@@ -876,7 +876,42 @@ def login():
             """,
             (employee_code,),
         ).fetchone()
+
+        if rep and rep["password_hash"] is None:
+            # SKT 계정과 연결된 사원 레코드(보물찾기 전용, 아래에서 생성). 비밀번호는
+            # 항상 admins 테이블 것만 본다 - 복사해두면 SKT 쪽 비밀번호를 바꿔도 여기 반영이 안 된다.
+            admin = conn.execute("SELECT * FROM admins WHERE UPPER(username) = ?", (employee_code,)).fetchone()
+            if not admin or (admin["role"] or "super") not in SKT_ROLES or not check_password_hash(
+                admin["password_hash"], password
+            ):
+                return jsonify({"error": "INVALID_PASSWORD", "message": "비밀번호가 올바르지 않습니다."}), 401
+            result = public_rep(_rep_with_dealer(conn, rep["id"]))
+            result["using_initial_password"] = False
+            result["must_change_password"] = False
+            result["token"] = _create_rep_session(conn, rep["id"])
+            return jsonify(result)
+
         if not rep:
+            # 아직 연결된 사원 레코드가 없어도 SKT 계정이면 여기서 처음 만들어 이어준다.
+            # SKT 계정도 같은 로그인 칸으로 보물찾기를 쓸 수 있게 하기 위해서다(요청: 2026-09-28).
+            raw_username = (body.get("employee_code") or "").strip()
+            admin = conn.execute("SELECT * FROM admins WHERE username = ?", (raw_username,)).fetchone()
+            if admin and (admin["role"] or "super") in SKT_ROLES:
+                if not check_password_hash(admin["password_hash"], password):
+                    return jsonify({"error": "INVALID_PASSWORD", "message": "비밀번호가 올바르지 않습니다."}), 401
+                rep_id = new_id()
+                conn.execute(
+                    """
+                    INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, created_at, must_change_password)
+                    VALUES (?, NULL, ?, ?, NULL, ?, 0)
+                    """,
+                    (rep_id, admin["name"] or admin["username"], normalize_employee_code(admin["username"]), now_iso()),
+                )
+                result = public_rep(_rep_with_dealer(conn, rep_id))
+                result["using_initial_password"] = False
+                result["must_change_password"] = False
+                result["token"] = _create_rep_session(conn, rep_id)
+                return jsonify(result)
             return jsonify({"error": "UNREGISTERED_EMPLOYEE", "message": "등록되지 않은 고유ID입니다. 관리자에게 엑셀 등록을 요청하세요."}), 404
 
         stored = rep["password_hash"]

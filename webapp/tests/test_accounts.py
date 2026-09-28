@@ -80,6 +80,92 @@ def test_create_account_rejects_bad_role(client, admin_token):
 
 
 # ---------------------------------------------------------------------------
+# SKT 계정도 같은 로그인 칸으로 보물찾기를 쓸 수 있다 (2026-09-28 요청)
+# ---------------------------------------------------------------------------
+
+
+def auth_rep(token):
+    return {"X-Rep-Token": token}
+
+
+def test_skt_staff_can_log_into_treasure_hunt(client, admin_token):
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234", "role": "staff", "name": "이갑재"},
+        headers=admin_auth(admin_token),
+    )
+    res = client.post("/api/auth/login", json={"employee_code": username, "password": "temp1234"})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["employee_code"] == username.upper()
+    assert body["must_change_password"] is False
+    token = body["token"]
+
+    nearby = client.get("/api/treasures/nearby?lat=37.5&lng=127.0", headers=auth_rep(token))
+    assert nearby.status_code == 200
+
+
+def test_skt_super_can_log_into_treasure_hunt(client):
+    res = client.post("/api/auth/login", json={"employee_code": "admin", "password": "admin"})
+    assert res.status_code == 200
+    assert res.get_json()["dealer_id"] is None or res.get_json()["dealer_id"] == ""
+
+
+def test_skt_login_wrong_password_is_invalid_not_unregistered(client, admin_token):
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234"},
+        headers=admin_auth(admin_token),
+    )
+    res = client.post("/api/auth/login", json={"employee_code": username, "password": "wrong-pw"})
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "INVALID_PASSWORD"
+
+
+def test_skt_login_reuses_same_linked_rep_and_tracks_password_changes(client, admin_token):
+    from db import db_session
+
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234"},
+        headers=admin_auth(admin_token),
+    )
+    first = client.post("/api/auth/login", json={"employee_code": username, "password": "temp1234"})
+    second = client.post("/api/auth/login", json={"employee_code": username, "password": "temp1234"})
+    assert first.get_json()["id"] == second.get_json()["id"]
+    with db_session() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) c FROM reps WHERE UPPER(employee_code) = ?", (username.upper(),)
+        ).fetchone()["c"]
+    assert count == 1
+
+    # SKT 쪽 비밀번호를 바꾸면 보물찾기 로그인도 곧바로 새 비밀번호를 따라간다 (해시를 복사해두지 않는다).
+    admin_token2 = client.post(
+        "/api/admin/login", json={"username": username, "password": "temp1234"}
+    ).get_json()["token"]
+    client.post(
+        "/api/admin/change-password",
+        json={"current_password": "temp1234", "new_password": "new-password-1"},
+        headers=admin_auth(admin_token2),
+    )
+    stale = client.post("/api/auth/login", json={"employee_code": username, "password": "temp1234"})
+    assert stale.status_code == 401
+    fresh = client.post("/api/auth/login", json={"employee_code": username, "password": "new-password-1"})
+    assert fresh.status_code == 200
+
+
+def test_unknown_code_is_still_unregistered(client):
+    res = client.post(
+        "/api/auth/login", json={"employee_code": f"NOBODY{uuid.uuid4().hex[:6]}", "password": "x"}
+    )
+    assert res.status_code == 404
+    assert res.get_json()["error"] == "UNREGISTERED_EMPLOYEE"
+
+
+# ---------------------------------------------------------------------------
 # 임시 대리점 계정 제거
 # ---------------------------------------------------------------------------
 

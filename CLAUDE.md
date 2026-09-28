@@ -63,6 +63,7 @@ webapp/
 | 판매점 | P코드(판매점코드), 매장당 1개 | 자기 매장만 | 시장동향 입력 예정 (프로젝트 3) |
 
 - 보물찾기 영업사원 = 대리점 직원. 같은 ID로 보물찾기와 재고 화면을 모두 쓴다.
+- **SKT 계정(총괄·직원)도 `/`(보물찾기)에 자기 아이디·비밀번호로 로그인할 수 있다** (2026-09-28 요청, 이전엔 "SKT 계정으로 로그인하지 않는다"가 원칙이었으나 뒤집었다). `POST /api/auth/login`이 사원 고유ID로 못 찾으면 `admins`에서 같은 아이디를 찾아 비밀번호를 확인하고, **연결된 사원 레코드**(`reps`, `dealer_id=NULL`, `password_hash=NULL`)를 처음 로그인할 때 하나 만들어 그 뒤로 계속 재사용한다. 비밀번호는 절대 `reps`에 복사해두지 않고 매번 `admins` 것만 확인한다(SKT 비밀번호를 바꾸면 보물찾기 로그인도 즉시 그 값을 따라간다) — `reps.password_hash IS NULL`이 "이 사원 레코드는 SKT 계정과 연결된 것"이라는 표식이다. 방문·포인트는 이 연결된 사원 id로 정상적으로 쌓인다. 소속 대리점이 없어서 재고 화면은 그대로 `NO_DEALER`(대리점 조회는 SKT 역할로 `/inventory`에서 이미 전체를 본다). `/`(app.js) 로그인 화면 자체는 안 바꿨다 — 로그인 칸에 SKT 아이디를 그대로 입력하면 된다.
 - 서버 데코레이터: `require_admin`(총괄) · `require_skt`(총괄+직원, 조회) · `require_rep`(영업사원 본인) · `require_inventory_user` · `require_inventory_uploader`
 - 세션: SKT는 `admin_sessions` + 헤더 `X-Admin-Token`. 사원은 `rep_sessions` + `X-Rep-Token` (재고 화면은 `X-Admin-Token` 헤더로 보내도 사원 토큰을 인정한다).
 - **요청 본문의 `rep_id` 같은 신원 값은 믿지 않는다.** 항상 토큰의 주인을 쓴다.
@@ -159,6 +160,7 @@ webapp/
 - 서버에서 최소 샘플 수와 샘플 간격 검증 (지금은 샘플 1개로도 통과 가능).
 - R1(가짜 위치)은 웹에서 판별할 수 없다. 필요하면 네이티브 앱/PWA 검토.
 - 아이디어: 체화 재고(30일+)가 있는 매장에 rare 보물을 자동 스폰 (프로젝트 2와 연결).
+- SKT 계정의 `/` 로그인은 아직 `rs_admin_token` 공유 SSO에 안 들어가 있다 — `/admin`이나 `/inventory`에 이미 로그인해 있어도 `/`는 따로 로그인해야 한다(app.js가 `rs_rep_token`만 본다). 필요해지면 `/inventory`의 `getStoredTokens()` 패턴을 app.js에도 넣을 것.
 
 ---
 
