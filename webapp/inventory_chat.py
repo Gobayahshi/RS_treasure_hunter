@@ -16,6 +16,7 @@ from inventory import (
     inventory_overview,
     inventory_store_price_sum,
     normalize_bbox,
+    resolve_petname_models,
 )
 from inventory_llm import interpret_inventory_question, llm_available
 
@@ -151,14 +152,32 @@ def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None
         "몇 개",
         "대인지",
         "알려",
+        "알려줘",
         "확인",
         "보여",
+        "보여줘",
         "찾아",
         "위치",
         "기준",
         "가장",
         "가까운",
         "근처",
+        "어디",
+        "많아",
+        "많이",
+        "많나요",
+        "얼마",
+        "얼마나",
+        "추천",
+        "궁금",
+        "궁금해",
+        "무엇",
+        "뭐",
+        "뭐가",
+        "무슨",
+        "어느",
+        "있는지",
+        "있나요",
         "있는",
         "곳의",
         "곳",
@@ -347,6 +366,13 @@ def ask_inventory(
     dealers = [d for d in all_dealers if d["id"] == dealer_id] if dealer_id else all_dealers
     nlu = "rules"
     rules = parse_inventory_question(text, dealers)
+    if not rules.get("models"):
+        # SM-코드로 못 알아들은 질문("플립7", "갤럭시 S25" 처럼 펫네임으로만 부른 경우)은
+        # 모델 조회 표(관리자가 올린 영업정책 모델 조회.xlsx)에서 대표모델을 찾아본다.
+        petname_models = resolve_petname_models(conn, text)
+        if petname_models:
+            rules["models"] = petname_models
+            rules["model"] = ",".join(petname_models)
     parsed = None
     # 30일/체화처럼 규칙이 이미 확실한 질문은 LLM을 건너뛴다. Render 30초 제한에 걸린다.
     skip_llm = rules.get("intent") in {"aged", "price"} or bool(rules.get("store_code"))

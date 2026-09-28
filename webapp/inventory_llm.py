@@ -189,6 +189,67 @@ def _normalize_model(raw: str) -> str:
     return model
 
 
+# 질문어/일반어. keyword는 매장명·주소 검색에 그대로 쓰이므로, 이런 단어가 섞이면
+# "어디 많아?" 같은 질문에서 진짜 지명 대신 "어디"가 keyword가 되어 0건이 나온다.
+_KEYWORD_STOPWORDS = {
+    "어디",
+    "어디에",
+    "어디서",
+    "어디에서",
+    "어딘가",
+    "많아",
+    "많이",
+    "많은",
+    "많나요",
+    "재고",
+    "전체",
+    "총",
+    "합계",
+    "몇",
+    "몇대",
+    "몇 대",
+    "몇개",
+    "몇 개",
+    "대",
+    "대인지",
+    "대인가요",
+    "보여줘",
+    "보여",
+    "알려줘",
+    "알려",
+    "확인",
+    "궁금",
+    "궁금해",
+    "있어",
+    "있어요",
+    "있나요",
+    "있는지",
+    "얼마",
+    "얼마나",
+    "추천",
+    "추천해줘",
+    "뭐",
+    "뭐가",
+    "무엇",
+    "무슨",
+    "어느",
+    "해줘",
+    "해 줘",
+    "줘",
+}
+
+
+def _clean_keyword(raw: str) -> str:
+    """질문어·일반어만 남은 keyword는 버린다 (매장명 검색이 0건으로 새는 것을 막는다)."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    compact = re.sub(r"\s+", "", text)
+    if compact in _KEYWORD_STOPWORDS:
+        return ""
+    return text
+
+
 def _match_dealer(dealer_name: str, dealers: list[dict]) -> dict | None:
     compact = re.sub(r"\s+", "", dealer_name or "").lower()
     if not compact:
@@ -232,7 +293,12 @@ def interpret_inventory_question(text: str, dealers: list[dict]) -> dict | None:
         "- 도움이면 help\n"
         "- models는 사용자가 말한 기종만. 대표상품명·모델명 그대로. 없으면 빈 배열(전체).\n"
         "- 빨강/주황/파랑 등 색으로 보여달라면 pin_color에 CSS hex(예: #dc2626)\n"
-        "- 폴드/F971=SM-F971, A175=SM-A175N, S931=SM-S931N"
+        "- 폴드/F971=SM-F971, A175=SM-A175N, S931=SM-S931N\n"
+        "- keyword는 진짜 지명·매장명일 때만 채운다. "
+        "'어디','어디에','많아','재고','몇','대','보여줘','얼마','추천'처럼 "
+        "질문에 흔히 붙는 말은 keyword로 쓰지 않는다(빈 문자열로 둔다).\n"
+        "- models를 채웠다면(기종이 확정됐다면) keyword는 기본적으로 비워 둔다. "
+        "김포·강남처럼 사용자가 진짜 지명이나 매장명을 함께 말한 경우에만 keyword도 채운다."
     )
     content = _chat(
         [
@@ -272,7 +338,7 @@ def interpret_inventory_question(text: str, dealers: list[dict]) -> dict | None:
         if single:
             models.append(single)
     region = (data.get("region") or "").strip()
-    keyword = (data.get("keyword") or "").strip()
+    keyword = _clean_keyword((data.get("keyword") or "").strip())
     dealer_name = (data.get("dealer_name") or "").strip()
     dealer = _match_dealer(dealer_name, dealers)
     use_map_area = bool(data.get("use_map_area")) or intent == "bbox"

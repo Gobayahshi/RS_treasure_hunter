@@ -173,6 +173,14 @@ CREATE TABLE IF NOT EXISTS inventory_items (
     dealer_name TEXT
 );
 
+CREATE TABLE IF NOT EXISTS model_lookup (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_name TEXT NOT NULL,
+    canonical_model TEXT NOT NULL,
+    petname TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_model_lookup_canonical ON model_lookup(canonical_model);
+
 -- 판매점이 수천 건이라 주변 검색/스폰에 필요한 인덱스를 둔다.
 CREATE INDEX IF NOT EXISTS idx_stores_latlng ON stores(lat, lng);
 CREATE INDEX IF NOT EXISTS idx_stores_address ON stores(address);

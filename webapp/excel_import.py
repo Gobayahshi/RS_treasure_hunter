@@ -38,6 +38,9 @@ STORE_ADDR_ALIASES = {"기본주소", "주소", "판매점주소", "매장주소
 DETAIL_ADDR_ALIASES = {"상세주소", "층호수", "detailaddress", "detail_address"}
 LAT_ALIASES = {"위도", "lat", "latitude"}
 LNG_ALIASES = {"경도", "lng", "lon", "longitude"}
+MODEL_LOOKUP_NAME_ALIASES = {"모델명", "modelname", "model_name"}
+MODEL_LOOKUP_CANONICAL_ALIASES = {"대표모델", "대표모델명", "canonicalmodel", "canonical_model"}
+MODEL_LOOKUP_PETNAME_ALIASES = {"펫네임", "펫네임명", "petname", "pet_name", "애칭"}
 
 
 def cell_str(value: Any) -> str:
@@ -206,6 +209,27 @@ def parse_uploads(files: list[tuple[str, bytes]]) -> dict[str, list[dict[str, st
 
     buckets["_unknown"] = unknown_sheets  # type: ignore[assignment]
     return buckets
+
+
+def parse_model_lookup_xlsx(data: bytes) -> list[dict[str, str]]:
+    """모델 조회.xlsx(모델명/대표모델/펫네임)를 읽는다. 시트/컬럼 순서는 신경 쓰지 않는다.
+
+    대표모델 열이 비어 있으면 모델명을 그대로 대표모델로 쓴다(그 자체가 대표모델인 행들).
+    """
+    wb = load_workbook(BytesIO(data), data_only=True)
+    try:
+        rows: list[dict[str, str]] = []
+        for ws in wb.worksheets:
+            for raw in sheet_to_rows(ws):
+                model_name = pick(raw, MODEL_LOOKUP_NAME_ALIASES)
+                canonical = pick(raw, MODEL_LOOKUP_CANONICAL_ALIASES) or model_name
+                petname = pick(raw, MODEL_LOOKUP_PETNAME_ALIASES)
+                if not model_name or not canonical:
+                    continue
+                rows.append({"model_name": model_name, "canonical_model": canonical, "petname": petname})
+        return rows
+    finally:
+        wb.close()
 
 
 def _find_dealer(conn, code: str, name: str):
