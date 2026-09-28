@@ -223,6 +223,43 @@ def test_summary_catalog_breakdown_and_price_sum(server, fixtures):
         assert dealer_id in [d.get("dealer_id") for d in roster["dealers"]]
 
 
+def test_model_breakdown_filters_to_requested_model(server, fixtures):
+    """"김포에 S931 얼마나 있어?" 처럼 특정 기종을 물었으면 그 영역의 다른 기종까지
+    끼워 보여주면 안 된다 (예전엔 area_model_totals가 항상 영역 안 전체 기종을 돌려줬다)."""
+    from db import db_session
+
+    code = fixtures["store_code"]
+    parsed = parse_inventory_file(
+        "재고.xlsx",
+        build_inventory_xlsx(
+            [
+                [code, "테스트판매점", "", "SM-S931", "1,000,000", 3, "S1", "테스트대리점"],
+                [code, "테스트판매점", "", "SM-A175", "500,000", 3, "S2", "테스트대리점"],
+            ]
+        ),
+    )
+    with db_session() as conn:
+        dealer = dict(
+            conn.execute("SELECT * FROM dealers WHERE id = ?", (fixtures["dealer_id"],)).fetchone()
+        )
+        replace_inventory(conn, parsed, "2026-09-28T00:00:00", lambda: os.urandom(8).hex(), dealer)
+
+        both = inventory_model_breakdown(conn, dealer_id=fixtures["dealer_id"])
+        assert {m["model"] for m in both} == {"SM-S931", "SM-A175"}
+
+        only_s931 = inventory_model_breakdown(
+            conn, dealer_id=fixtures["dealer_id"], models=["SM-S931"]
+        )
+        assert [m["model"] for m in only_s931] == ["SM-S931"]
+
+        from inventory_chat import ask_inventory
+
+        # 지역 질문("서울에 S931 얼마나 있어")이라야 area_model_totals(영역 기종별 표)를 만든다.
+        result = ask_inventory(conn, "서울에 S931 얼마나 있어", dealer_id=fixtures["dealer_id"])
+        area_models = [m["model"] for m in (result["map"].get("area_model_totals") or [])]
+        assert area_models == ["SM-S931"]
+
+
 def test_roster_lists_dealers_with_staff_even_before_upload(server, fixtures):
     """임시 계정을 없앤 뒤에도, 직원이 있는 대리점은 '미업로드'로 목록에 나와야 한다."""
     from db import db_session

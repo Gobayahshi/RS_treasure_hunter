@@ -617,6 +617,9 @@ def _answer_from_parsed(
     if intent in {"analyze", "compare", "total", "bbox"}:
         overview = inventory_overview(conn, dealer_id)
     if wanted_bbox or keyword or region or intent in {"analyze", "compare", "bbox"}:
+        # 기종을 특정해서 물었으면("김포에 S931 얼마나 있어") 그 영역의 다른 기종까지
+        # 끼워 보여줄 필요가 없다 — 물어본 기종(들)만 집계한다. 전체를 물었을 때만
+        # (data["models"]가 비어 있을 때) 영역 안 모든 기종을 보여준다.
         all_models = inventory_model_breakdown(
             conn,
             dealer_id=dealer_id,
@@ -624,6 +627,7 @@ def _answer_from_parsed(
             keyword=keyword,
             bbox=wanted_bbox,
             limit=80,
+            models=data.get("models") or None,
         )
         data["area_model_totals"] = all_models
     as_of = _as_of(data)

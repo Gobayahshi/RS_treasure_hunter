@@ -1165,12 +1165,30 @@ def inventory_model_breakdown(
     bbox=None,
     circle=None,
     limit: int = 20,
+    models: list[str] | None = None,
 ) -> list[dict]:
-    """필터에 맞는 모든 기종 대수. 지도에 안 올린 기종도 포함한다."""
+    """필터에 맞는 기종별 대수. 지도에 안 올린 기종도 포함한다.
+
+    models 를 주면 그 기종(들)만 집계한다 — 사용자가 "김포에 S931 얼마나 있어"처럼
+    특정 기종을 물었는데, 그 영역에 있는 상관없는 다른 기종까지 표로 보여줄 필요는 없다.
+    비워두면(전체 기종을 물은 경우) 지금처럼 영역 안 모든 기종을 보여준다.
+    """
     upload_ids, _uploads = _partner_upload_filter(conn, dealer_id)
     if not upload_ids:
         return []
     extra, extra_params = _scope_filters(region, keyword, bbox, circle)
+    model_extra = ""
+    model_params: list = []
+    wanted_models = [m for m in (models or []) if m]
+    if wanted_models:
+        wheres = []
+        for name in wanted_models:
+            like = f"{name.upper()}%"
+            wheres.append(
+                "(UPPER(COALESCE(i.product_short, '')) LIKE ? OR UPPER(COALESCE(i.model_name, '')) LIKE ?)"
+            )
+            model_params.extend([like, like])
+        model_extra = " AND (" + " OR ".join(wheres) + ")"
     rows = conn.execute(
         f"""
         SELECT
@@ -1183,11 +1201,12 @@ def inventory_model_breakdown(
         WHERE i.upload_id IN ({','.join('?' * len(upload_ids))})
           AND i.holder_type = 'partner'
           {extra}
+          {model_extra}
         GROUP BY COALESCE(NULLIF(i.product_short, ''), i.model_name, '미상')
         ORDER BY qty DESC
         LIMIT ?
         """,
-        (AGED_DAYS, *upload_ids, *extra_params, limit),
+        (AGED_DAYS, *upload_ids, *extra_params, *model_params, limit),
     ).fetchall()
     return [
         {

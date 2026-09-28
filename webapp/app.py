@@ -2873,6 +2873,7 @@ def inventory_map():
                 bbox=bbox,
                 circle=circle,
                 limit=80,
+                models=data.get("models") or None,
             )
         return jsonify(data)
 
