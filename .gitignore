@@ -35,3 +35,7 @@ webapp/static/inventory-preview-data.js
 .vscode/
 .idea/
 webapp/check_out.txt
+
+# Claude Code: 대화창별 워크트리 체크아웃(중첩 git 저장소)과 잠금 파일은 로컬 전용
+.claude/worktrees/
+.claude/scheduled_tasks.lock
