@@ -1522,6 +1522,7 @@ function fillProductSelect() {
   filterPickMenu(menu);
   pickedProductShorts = pickedProductShorts.filter((v) => modelCatalog.some((p) => p.product_short === v));
   updateMultiPickLabel("productShortBtn", pickedProductShorts, "전체");
+  fillColorSelect();
   fillModelSelect();
 }
 
@@ -1542,9 +1543,13 @@ function selectedProductModels() {
   const products = pickedProductShorts.length
     ? modelCatalog.filter((p) => pickedProductShorts.includes(p.product_short))
     : [];
+  // 색상을 먼저 골랐으면(대표상품명 바로 다음 칸이라 모델명보다 먼저 고르게 된다)
+  // 그 색상이 있는 모델만 모델명 목록에 남긴다.
+  const wantedColors = pickedColors.length ? new Set(pickedColors) : null;
   const merged = new Map();
   for (const p of products) {
     for (const m of p.models || []) {
+      if (wantedColors && !(m.colors || []).some((c) => wantedColors.has(c.color))) continue;
       const prev = merged.get(m.model_name) || { model_name: m.model_name, qty: 0 };
       prev.qty += m.qty || 0;
       merged.set(m.model_name, prev);
@@ -1570,7 +1575,6 @@ function fillModelSelect() {
   if (!models.length) {
     pickedModelNames = [];
     updateMultiPickLabel("modelNameBtn", [], "대표상품 먼저");
-    fillColorSelect();
     return;
   }
   const search = document.createElement("input");
@@ -1602,7 +1606,6 @@ function fillModelSelect() {
   filterPickMenu(menu);
   pickedModelNames = pickedModelNames.filter((v) => models.some((m) => m.model_name === v));
   updateMultiPickLabel("modelNameBtn", pickedModelNames, "해당 기종 전체");
-  fillColorSelect();
 }
 
 function updateMultiPickLabel(btnId, values, emptyText) {
@@ -1667,25 +1670,25 @@ function resetMapStyle() {
 function onProductShortChange() {
   pickedProductShorts = readChecked("productShortMenu");
   pickedModelNames = [];
+  pickedColors = [];
   updateMultiPickLabel("productShortBtn", pickedProductShorts, "전체");
+  fillColorSelect();
   fillModelSelect();
 }
 
 function onModelNameChange() {
   pickedModelNames = readChecked("modelNameMenu");
   updateMultiPickLabel("modelNameBtn", pickedModelNames, "해당 기종 전체");
-  fillColorSelect();
 }
 
 function selectedModelColors() {
+  // 색상 칸이 대표상품명 바로 다음(모델명보다 앞)이라 대표상품명만 보고 고른다.
   const products = pickedProductShorts.length
     ? modelCatalog.filter((p) => pickedProductShorts.includes(p.product_short))
     : [];
-  const wantedModels = pickedModelNames.length ? new Set(pickedModelNames) : null;
   const merged = new Map();
   for (const p of products) {
     for (const m of p.models || []) {
-      if (wantedModels && !wantedModels.has(m.model_name)) continue;
       for (const c of m.colors || []) {
         const prev = merged.get(c.color) || { color: c.color, qty: 0 };
         prev.qty += c.qty || 0;
@@ -1702,14 +1705,14 @@ function fillColorSelect() {
   const menu = $("colorNameMenu");
   const btn = $("colorNameBtn");
   if (!menu || !btn) return;
-  const colors = pickedModelNames.length ? selectedModelColors() : [];
+  const colors = pickedProductShorts.length ? selectedModelColors() : [];
   const keep = new Set(pickedColors);
   const prevQuery = (menu.querySelector(".multi-pick-search") || {}).value || "";
   menu.innerHTML = "";
   btn.disabled = !colors.length;
   if (!colors.length) {
     pickedColors = [];
-    updateMultiPickLabel("colorNameBtn", [], pickedModelNames.length ? "색상 정보 없음" : "모델명 먼저");
+    updateMultiPickLabel("colorNameBtn", [], pickedProductShorts.length ? "색상 정보 없음" : "대표상품 먼저");
     return;
   }
   const search = document.createElement("input");
@@ -1746,6 +1749,7 @@ function fillColorSelect() {
 function onColorChange() {
   pickedColors = readChecked("colorNameMenu");
   updateMultiPickLabel("colorNameBtn", pickedColors, "전체 색상");
+  fillModelSelect();
 }
 
 function applyMapLookup() {
