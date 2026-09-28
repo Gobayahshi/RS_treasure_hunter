@@ -567,6 +567,19 @@ function formatKm(meters) {
   return `${(meters / 1000).toFixed(1)}km`;
 }
 
+// 로그인 직후엔 컨테이너가 막 hidden 이 풀리거나(특히 모바일 레이아웃) 화면이
+// 다시 배치되는 중이라, 생성 시점 크기로는 resize() 를 불러도 실제로 다시 그려지지
+// 않을 때가 있다. 레이아웃이 완전히 자리잡을 때까지 짧게 여러 번 눌러준다.
+function pulseResize(map, durationMs = 2000, intervalMs = 150) {
+  const start = Date.now();
+  const tick = () => {
+    if (!map || Date.now() - start > durationMs) return;
+    map.resize();
+    setTimeout(tick, intervalMs);
+  };
+  tick();
+}
+
 function fitLandscapeFocus(map) {
   if (!map) return false;
   map.resize();
@@ -629,7 +642,12 @@ function ensureChatMap() {
     attributionControl: { compact: true },
   });
   chatMap.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
-  chatMap.on("load", () => ensureAreaLayer(chatMap));
+  chatMap.on("load", () => {
+    // 로그인 직후엔 컨테이너가 막 hidden 이 풀린 상태라 생성 시점의 크기를 0으로 잡을 때가 있다.
+    // 스타일 로드가 끝난 뒤(레이아웃이 확실히 자리잡은 뒤) 한 번 더 강제로 맞춘다.
+    chatMap.resize();
+    ensureAreaLayer(chatMap);
+  });
   chatMap.on("zoomend", () => {
     const show = chatMap.getZoom() >= 12;
     if (show !== storeLabelsOn && lastChatMapData) {
@@ -647,6 +665,7 @@ function ensureChatMap() {
     ro.observe(pane);
   }
   scheduleLandscapeFocus(chatMap);
+  pulseResize(chatMap);
   return chatMap;
 }
 

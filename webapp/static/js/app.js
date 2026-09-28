@@ -11,9 +11,9 @@ let rep = null;
 let currentPosition = null;
 let visitState = null; // { sessionId, store, timerId, elapsedSeconds }
 let treasureMap = null;
-let mapMarkersLayer = null;
-let meMarker = null;
-let meAccuracyCircle = null;
+let treasureMarkers = []; // maplibregl.Marker[]
+let meMarker = null; // maplibregl.Marker
+let hasAccuracyCircle = false;
 let suppressMapMoveLoad = false;
 let mapMoveTimer = null;
 let mapLoadSeq = 0;
@@ -84,8 +84,12 @@ function startPositionWatch() {
   positionWatchId = navigator.geolocation.watchPosition(
     (pos) => {
       currentPosition = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      if (meMarker) meMarker.setLatLng([currentPosition.lat, currentPosition.lng]);
-      if (meAccuracyCircle) meAccuracyCircle.setLatLng([currentPosition.lat, currentPosition.lng]);
+      if (meMarker) meMarker.setLngLat([currentPosition.lng, currentPosition.lat]);
+      if (hasAccuracyCircle && treasureMap && treasureMap.getSource("me-accuracy")) {
+        treasureMap
+          .getSource("me-accuracy")
+          .setData(circleFeature(currentPosition.lat, currentPosition.lng, VISIT_RADIUS_METERS));
+      }
     },
     () => {}, // 실시간 갱신 실패는 조용히 무시한다 (최초 위치는 loadTreasures가 이미 가져옴)
     { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
@@ -127,6 +131,47 @@ function haversineDistanceMeters(lat1, lon1, lat2, lon2) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// MapLibre는 지오메트리 원을 그려주는 기능이 없어서(Leaflet의 L.circle과 달리)
+// 위도 보정을 넣은 다각형으로 직접 근사한다.
+function circlePolygonCoords(lat, lng, radiusMeters, steps = 64) {
+  const R = 6371000;
+  const latRad = (lat * Math.PI) / 180;
+  const coords = [];
+  for (let i = 0; i <= steps; i++) {
+    const angle = (i / steps) * 2 * Math.PI;
+    const dx = (radiusMeters * Math.cos(angle)) / (R * Math.cos(latRad));
+    const dy = (radiusMeters * Math.sin(angle)) / R;
+    coords.push([lng + (dx * 180) / Math.PI, lat + (dy * 180) / Math.PI]);
+  }
+  return coords;
+}
+
+function circleFeature(lat, lng, radiusMeters) {
+  return {
+    type: "Feature",
+    properties: {},
+    geometry: { type: "Polygon", coordinates: [circlePolygonCoords(lat, lng, radiusMeters)] },
+  };
+}
+
+// points: [lat, lng][] → MapLibre fitBounds가 쓰는 [[west,south],[east,north]]
+function boundsFromPoints(points) {
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  for (const [lat, lng] of points) {
+    west = Math.min(west, lng);
+    east = Math.max(east, lng);
+    south = Math.min(south, lat);
+    north = Math.max(north, lat);
+  }
+  return [
+    [west, south],
+    [east, north],
+  ];
 }
 
 function getCurrentPosition() {
@@ -278,23 +323,39 @@ function enterApp() {
 // ---------------------------------------------------------------------------
 // 지도(근처 보물 목록)
 // ---------------------------------------------------------------------------
+const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+
+// 로그인 직후엔 컨테이너가 막 hidden 이 풀리거나(특히 모바일 레이아웃) 화면이
+// 다시 배치되는 중이라, 생성 시점 크기로는 resize() 를 불러도 실제로 다시 그려지지
+// 않을 때가 있다. 레이아웃이 완전히 자리잡을 때까지 짧게 여러 번 눌러준다.
+function pulseResize(map, durationMs = 2000, intervalMs = 150) {
+  const start = Date.now();
+  const tick = () => {
+    if (!map || Date.now() - start > durationMs) return;
+    map.resize();
+    setTimeout(tick, intervalMs);
+  };
+  tick();
+}
+
 function ensureMap() {
   if (treasureMap) {
-    setTimeout(() => treasureMap.invalidateSize(), 50);
+    setTimeout(() => treasureMap.resize(), 50);
     return treasureMap;
   }
 
-  treasureMap = L.map("treasureMap", {
-    zoomControl: true,
-    attributionControl: true,
-  }).setView([37.5665, 126.978], 14);
-
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(treasureMap);
-
-  mapMarkersLayer = L.layerGroup().addTo(treasureMap);
+  treasureMap = new maplibregl.Map({
+    container: "treasureMap",
+    style: MAP_STYLE_URL,
+    center: [126.978, 37.5665],
+    zoom: 14,
+    maxPitch: 0, // 평면 유지 (회전은 됨, 틸트는 안 됨)
+    attributionControl: { compact: true },
+  });
+  treasureMap.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
+  // 로그인 직후엔 컨테이너가 막 hidden 이 풀린 상태라 생성 시점의 크기를 0으로 잡을 때가 있다.
+  // 스타일 로드가 끝난 뒤(레이아웃이 확실히 자리잡은 뒤) 한 번 더 강제로 맞춘다.
+  treasureMap.on("load", () => treasureMap.resize());
 
   treasureMap.on("moveend", () => {
     if (suppressMapMoveLoad) return;
@@ -307,7 +368,7 @@ function ensureMap() {
     }, 350);
   });
 
-  setTimeout(() => treasureMap.invalidateSize(), 80);
+  pulseResize(treasureMap);
   return treasureMap;
 }
 
@@ -318,47 +379,65 @@ function radiusKmForMapView(map) {
   return Math.min(50, Math.max(0.8, meters / 1000));
 }
 
-function treasureIcon(tier, withinRadius) {
+function treasureMarkerElement(tier, withinRadius) {
   const color = withinRadius ? "#16a34a" : tier === "rare" ? "#d97706" : "#2563eb";
   const label = tier === "rare" ? "★" : "●";
-  return L.divIcon({
-    className: "treasure-marker",
-    html: `<div class="treasure-pin" style="background:${color}">${label}</div>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    popupAnchor: [0, -14],
+  const el = document.createElement("div");
+  el.className = "treasure-marker";
+  el.innerHTML = `<div class="treasure-pin" style="background:${color}">${label}</div>`;
+  return el;
+}
+
+function ensureAccuracyLayer(map) {
+  if (map.getSource("me-accuracy")) return true;
+  if (!map.isStyleLoaded()) return false;
+  map.addSource("me-accuracy", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] },
   });
+  map.addLayer({
+    id: "me-accuracy-fill",
+    type: "fill",
+    source: "me-accuracy",
+    paint: { "fill-color": "#93c5fd", "fill-opacity": 0.25 },
+  });
+  map.addLayer({
+    id: "me-accuracy-line",
+    type: "line",
+    source: "me-accuracy",
+    paint: { "line-color": "#2563eb", "line-width": 1 },
+  });
+  hasAccuracyCircle = true;
+  return true;
 }
 
 function renderTreasureMap(treasures, options = {}) {
   const { fitBounds = true } = options;
   const map = ensureMap();
-  mapMarkersLayer.clearLayers();
+  if (!map.isStyleLoaded()) {
+    map.once("load", () => renderTreasureMap(treasures, options));
+    return;
+  }
+
+  treasureMarkers.forEach((m) => m.remove());
+  treasureMarkers = [];
 
   if (meMarker) {
-    map.removeLayer(meMarker);
+    meMarker.remove();
     meMarker = null;
   }
-  meAccuracyCircle = null;
 
   if (currentPosition) {
-    meMarker = L.circleMarker([currentPosition.lat, currentPosition.lng], {
-      radius: 9,
-      color: "#1d4ed8",
-      weight: 2,
-      fillColor: "#3b82f6",
-      fillOpacity: 0.95,
-    })
-      .bindPopup("내 위치")
+    const dot = document.createElement("div");
+    dot.className = "me-dot";
+    meMarker = new maplibregl.Marker({ element: dot })
+      .setLngLat([currentPosition.lng, currentPosition.lat])
+      .setPopup(new maplibregl.Popup({ offset: 12 }).setText("내 위치"))
       .addTo(map);
 
-    meAccuracyCircle = L.circle([currentPosition.lat, currentPosition.lng], {
-      radius: VISIT_RADIUS_METERS,
-      color: "#2563eb",
-      weight: 1,
-      fillColor: "#93c5fd",
-      fillOpacity: 0.15,
-    }).addTo(mapMarkersLayer);
+    if (ensureAccuracyLayer(map)) {
+      map.getSource("me-accuracy").setData(circleFeature(currentPosition.lat, currentPosition.lng, VISIT_RADIUS_METERS));
+    }
   }
 
   const bounds = [];
@@ -370,14 +449,13 @@ function renderTreasureMap(treasures, options = {}) {
     if (lat == null || lng == null) continue;
 
     const withinRadius = t.distanceMeters <= VISIT_RADIUS_METERS;
-    const marker = L.marker([lat, lng], { icon: treasureIcon(t.tier, withinRadius) });
     const tierLabel = t.tier === "rare" ? "⭐ 레어" : "🏅 일반";
     const pointsLabel = t.award_points ? ` · ${t.award_points}P` : "";
     const actionHtml = withinRadius
       ? `<button type="button" class="map-visit-btn" data-store-id="${t.store.id}">보물 캐러가기</button>`
       : `<p class="muted small">매장 근처(30m)로 이동하세요</p>`;
 
-    marker.bindPopup(
+    const popup = new maplibregl.Popup({ offset: 14 }).setHTML(
       `<div class="map-popup">
         <strong>${tierLabel}${pointsLabel}</strong>
         <div class="store-name">${treasurePlaceName(t.store)}</div>
@@ -386,28 +464,30 @@ function renderTreasureMap(treasures, options = {}) {
         ${actionHtml}
       </div>`
     );
-
-    marker.on("popupopen", () => {
+    popup.on("open", () => {
       const btn = document.querySelector(`.map-visit-btn[data-store-id="${t.store.id}"]`);
       if (btn) {
         btn.onclick = () => startVisit(t.store);
       }
     });
 
-    marker.addTo(mapMarkersLayer);
+    const marker = new maplibregl.Marker({ element: treasureMarkerElement(t.tier, withinRadius) })
+      .setLngLat([lng, lat])
+      .setPopup(popup)
+      .addTo(map);
+    treasureMarkers.push(marker);
     bounds.push([lat, lng]);
   }
 
   if (fitBounds && bounds.length > 0) {
     suppressMapMoveLoad = true;
     if (bounds.length === 1) {
-      map.setView(bounds[0], 15);
+      map.jumpTo({ center: [bounds[0][1], bounds[0][0]], zoom: 15 });
     } else {
-      map.fitBounds(bounds, { padding: [36, 36], maxZoom: 16 });
+      map.fitBounds(boundsFromPoints(bounds), { padding: 36, maxZoom: 16, animate: false });
       // 보물이 넓게 흩어져 있으면 fitBounds가 너무 멀리 빠지므로, 처음 보이는 화면은 최소 이 정도로 가까이 잡는다.
-      // fitBounds 직후 애니메이션 중에 setZoom을 또 걸면 조용히 무시될 수 있어 animate:false로 즉시 반영한다.
       if (map.getZoom() < MIN_INITIAL_ZOOM) {
-        map.setZoom(MIN_INITIAL_ZOOM, { animate: false });
+        map.setZoom(MIN_INITIAL_ZOOM);
       }
     }
     setTimeout(() => {
@@ -415,7 +495,7 @@ function renderTreasureMap(treasures, options = {}) {
     }, 500);
   }
 
-  setTimeout(() => map.invalidateSize(), 80);
+  setTimeout(() => map.resize(), 80);
 }
 
 async function loadTreasuresAt(lat, lng, options = {}) {
