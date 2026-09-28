@@ -11,6 +11,7 @@ let lastChatMapData = null;
 let lastChatOrigin = null;
 let storeLabelsOn = null;
 let pendingQuestion = "";
+let lastStoreCode = ""; // "그 판매점", "거기" 같은 말이 가리킬 직전 응답의 대표 매장
 let areaShape = null; // null | "rect" | "circle" — 지금 켜져 있거나 마지막으로 그린 모양
 let areaDrawing = false;
 let areaStart = null;
@@ -1688,6 +1689,16 @@ function removeThinking() {
   if (el) el.remove();
 }
 
+function extractPrimaryStoreCode(data) {
+  // "그 판매점", "거기" 처럼 다음 질문이 가리킬 만한, 이번 응답이 콕 집은 매장 하나를 고른다.
+  // 지역/전체처럼 매장이 여러 곳이면 어느 걸 가리키는지 알 수 없으니 기억하지 않는다.
+  if (!data || !data.map) return "";
+  if (data.map.nearest && data.map.nearest.store_code) return data.map.nearest.store_code;
+  const points = data.map.points || [];
+  if (points.length === 1 && points[0].store_code) return points[0].store_code;
+  return "";
+}
+
 async function sendQuestion(text, coords) {
   pendingQuestion = text;
   addThinking();
@@ -1699,6 +1710,7 @@ async function sendQuestion(text, coords) {
     }
     if (areaBounds) body.bbox = areaBounds;
     if (inventoryUser.can_see_all && hqDealerId) body.dealer_id = hqDealerId;
+    if (lastStoreCode) body.last_store_code = lastStoreCode;
     const data = await api("/inventory/ask", {
       method: "POST",
       body: JSON.stringify(body),
@@ -1720,6 +1732,8 @@ async function sendQuestion(text, coords) {
       renderChatMap(data.map, coords || null);
       if (areaBounds || (data.map && data.map.bbox)) renderAreaTable(data.map);
     }
+    const primary = extractPrimaryStoreCode(data);
+    if (primary) lastStoreCode = primary;
   } catch (err) {
     removeThinking();
     addBot("답을 가져오지 못했습니다. 다시 물어봐 주세요.");

@@ -43,3 +43,32 @@ def test_interpret_inventory_question_drops_llm_question_word_keyword(monkeypatc
     parsed = interpret_inventory_question("SM-F971 어디 많아", [])
     assert parsed["model"] == "SM-F971"
     assert parsed["keyword"] == ""
+
+
+def test_parse_inventory_question_resolves_referring_pronoun_to_last_store():
+    """"그 판매점에 무슨 재고 있어?" 는 지명/코드가 없어 이전엔 전체 집계로 빠졌다.
+
+    프런트가 직전 응답의 대표 매장(store_code)을 last_store_code 로 같이 보내면
+    "그 판매점"/"거기" 같은 말을 그 매장을 가리키는 것으로 본다.
+    """
+    parsed = parse_inventory_question("그 판매점에 무슨 재고가 있어", last_store_code="PC0198")
+    assert parsed["store_code"] == "PC0198"
+    assert parsed["keyword"] == "PC0198"
+    assert parsed["intent"] == "keyword"
+
+
+def test_parse_inventory_question_ignores_referring_pronoun_without_last_store():
+    parsed = parse_inventory_question("그 판매점에 무슨 재고가 있어")
+    assert parsed["store_code"] == ""
+    assert parsed["keyword"] == ""
+
+
+def test_parse_inventory_question_explicit_store_code_wins_over_last_store():
+    parsed = parse_inventory_question("PC9999에 무슨 재고 있어", last_store_code="PC0198")
+    assert parsed["store_code"] == "PC9999"
+
+
+def test_parse_inventory_question_recognizes_letter_prefixed_store_code():
+    """실제 P코드는 'PE2810'처럼 P+영문자+숫자 형태가 흔한데, 숫자만 잡던 정규식이 놓치고 있었다."""
+    parsed = parse_inventory_question("PE2810 재고 얼마나 있어")
+    assert parsed["store_code"] == "PE2810"

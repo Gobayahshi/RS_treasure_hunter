@@ -2893,6 +2893,7 @@ def inventory_ask():
             return jsonify({"error": "lat, lng는 숫자여야 합니다."}), 400
     bbox = body.get("bbox")
     dealer_id = _scoped_dealer_id() or (body.get("dealer_id") or "").strip() or None
+    last_store_code = (body.get("last_store_code") or "").strip()
     try:
         with db_session() as conn:
             result = ask_inventory(
@@ -2902,6 +2903,7 @@ def inventory_ask():
                 lng=lng,
                 bbox=bbox,
                 dealer_id=dealer_id,
+                last_store_code=last_store_code,
             )
         return jsonify(result)
     except Exception:

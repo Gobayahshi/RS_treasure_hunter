@@ -41,6 +41,28 @@ COMPARE_HINTS = ("비교", "어디가 더", "더 많", "차이")
 AREA_HINTS = ("이 영역", "이영역", "선택한 영역", "고른 영역", "지도에서 선택", "박스", "사각형")
 ANALYZE_HINTS = ("어때", "현황", "요약", "추천", "먼저", "문제", "분석", "어디부터")
 COLOR_HINTS = ("색으로", "색깔", "색상", "칠해", "표시해", "보여줘", "보여 줘")
+# "그 판매점에 무슨 재고 있어?" 처럼 바로 앞 답에서 나온 매장을 가리키는 말.
+# 이 말만으로는 매장을 특정할 수 없어서, 프런트가 직전 응답의 대표 매장(store_code)을
+# last_store_code 로 함께 보내주면 그 매장으로 좁힌다 (질문 자체엔 P코드/지명이 없어도 됨).
+REFER_HINTS = (
+    "그 판매점",
+    "그판매점",
+    "그 매장",
+    "그매장",
+    "그 곳",
+    "그곳",
+    "거기",
+    "해당 매장",
+    "해당매장",
+    "해당 판매점",
+    "이 매장",
+    "이매장",
+    "이 판매점",
+    "방금 그",
+    "방금그",
+    "아까 그",
+    "아까그",
+)
 
 _PIN_COLORS = (
     ("빨간색", "#dc2626"),
@@ -120,11 +142,16 @@ def _extract_region(text: str) -> str:
     return ranked[0][1]
 
 
-def _extract_store_code(text: str) -> str:
-    match = re.search(r"P\s*\d{4,}", text or "", re.I)
-    if not match:
-        return ""
-    return re.sub(r"\s+", "", match.group(0)).upper()
+def _extract_store_code(text: str, last_store_code: str = "") -> str:
+    # 실제 P코드는 "PE2810"/"PC0198"처럼 P + 영문자 1개 + 숫자 형태도 많다.
+    # 숫자만 있는 P\d+ 만 잡으면 이런 코드를 그대로 타이핑해도 못 알아듣는다.
+    match = re.search(r"P\s*[A-Za-z]?\s*\d{4,}", text or "", re.I)
+    if match:
+        return re.sub(r"\s+", "", match.group(0)).upper()
+    compact = _compact(text)
+    if last_store_code and any(h in compact for h in REFER_HINTS):
+        return last_store_code.strip().upper()
+    return ""
 
 
 def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None) -> str:
@@ -296,13 +323,15 @@ def _top_stores_bit(points: list, n: int = 3) -> str:
     return " 많은 곳부터 " + ", ".join(bits) + "입니다."
 
 
-def parse_inventory_question(text: str, dealers: list[dict] | None = None) -> dict:
+def parse_inventory_question(
+    text: str, dealers: list[dict] | None = None, last_store_code: str = ""
+) -> dict:
     raw = (text or "").strip()
     compact = _compact(raw)
     model = _extract_model(raw)
     region = _extract_region(raw)
     dealer = _extract_dealer(raw, dealers or [])
-    store_code = _extract_store_code(raw)
+    store_code = _extract_store_code(raw, last_store_code)
     extra = []
     if dealer:
         extra.extend([dealer.get("name") or "", dealer.get("dealer_code") or "", "대리점"])
@@ -361,11 +390,12 @@ def ask_inventory(
     lng: float | None = None,
     bbox=None,
     dealer_id: str | None = None,
+    last_store_code: str | None = None,
 ) -> dict:
     all_dealers = [dict(r) for r in conn.execute("SELECT id, dealer_code, name FROM dealers").fetchall()]
     dealers = [d for d in all_dealers if d["id"] == dealer_id] if dealer_id else all_dealers
     nlu = "rules"
-    rules = parse_inventory_question(text, dealers)
+    rules = parse_inventory_question(text, dealers, last_store_code=(last_store_code or "").strip())
     if not rules.get("models"):
         # SM-코드로 못 알아들은 질문("플립7", "갤럭시 S25" 처럼 펫네임으로만 부른 경우)은
         # 모델 조회 표(관리자가 올린 영업정책 모델 조회.xlsx)에서 대표모델을 찾아본다.
