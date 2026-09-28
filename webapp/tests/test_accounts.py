@@ -99,11 +99,32 @@ def test_skt_staff_can_log_into_treasure_hunt(client, admin_token):
     assert res.status_code == 200
     body = res.get_json()
     assert body["employee_code"] == username.upper()
-    assert body["must_change_password"] is False
+    # SKT 쪽 초기 비밀번호를 아직 안 바꿨으면 여기도 그대로 반영된다.
+    assert body["must_change_password"] is True
     token = body["token"]
 
     nearby = client.get("/api/treasures/nearby?lat=37.5&lng=127.0", headers=auth_rep(token))
     assert nearby.status_code == 200
+
+
+def test_skt_treasure_hunt_login_also_works_on_inventory_screen(client, admin_token):
+    """보물찾기(`/`)에서 SKT 계정으로 로그인한 토큰이 재고 화면(`/inventory`)에서도
+    다시 로그인할 필요 없이 그대로 통해야 한다 (2026-09-28에 실제로 이게 깨져서 보고됨:
+    사원 세션으로만 로그인시키면 연결된 사원이 소속 대리점이 없어 NO_DEALER 로 막혔었다).
+    """
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234", "role": "staff"},
+        headers=admin_auth(admin_token),
+    )
+    token = client.post(
+        "/api/auth/login", json={"employee_code": username, "password": "temp1234"}
+    ).get_json()["token"]
+
+    inv_me = client.get("/api/inventory/me", headers=auth_rep(token))
+    assert inv_me.status_code == 200
+    assert inv_me.get_json()["role"] == "staff"
 
 
 def test_skt_super_can_log_into_treasure_hunt(client):

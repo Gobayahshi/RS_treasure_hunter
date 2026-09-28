@@ -505,12 +505,29 @@ def _rep_from_token(conn, token: str):
         """,
         (token,),
     ).fetchone()
-    if not row:
+    if row:
+        if datetime.utcnow() - parse_iso(row["session_created_at"]) > timedelta(days=REP_SESSION_DAYS):
+            conn.execute("DELETE FROM rep_sessions WHERE token = ?", (token,))
+            return None
+        return dict(row)
+
+    # 사원 세션이 아니면 SKT 계정(admin_sessions) 세션인지 본다 - SKT 계정도 보물찾기를
+    # 쓸 수 있게, 연결된 사원 레코드를 찾아(없으면 만들어) 이어준다.
+    admin = _admin_from_token(conn, token)
+    if not admin:
         return None
-    if datetime.utcnow() - parse_iso(row["session_created_at"]) > timedelta(days=REP_SESSION_DAYS):
-        conn.execute("DELETE FROM rep_sessions WHERE token = ?", (token,))
-        return None
-    return dict(row)
+    linked = find_rep(conn, admin["username"])
+    if not linked:
+        rep_id = new_id()
+        conn.execute(
+            """
+            INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, created_at, must_change_password)
+            VALUES (?, NULL, ?, ?, NULL, ?, 0)
+            """,
+            (rep_id, admin["name"], normalize_employee_code(admin["username"]), now_iso()),
+        )
+        linked = find_rep(conn, admin["username"])
+    return dict(_rep_with_dealer(conn, linked["id"]))
 
 
 def require_rep(fn):
@@ -877,42 +894,29 @@ def login():
             (employee_code,),
         ).fetchone()
 
-        if rep and rep["password_hash"] is None:
-            # SKT 계정과 연결된 사원 레코드(보물찾기 전용, 아래에서 생성). 비밀번호는
-            # 항상 admins 테이블 것만 본다 - 복사해두면 SKT 쪽 비밀번호를 바꿔도 여기 반영이 안 된다.
-            admin = conn.execute("SELECT * FROM admins WHERE UPPER(username) = ?", (employee_code,)).fetchone()
-            if not admin or (admin["role"] or "super") not in SKT_ROLES or not check_password_hash(
-                admin["password_hash"], password
-            ):
-                return jsonify({"error": "INVALID_PASSWORD", "message": "비밀번호가 올바르지 않습니다."}), 401
-            result = public_rep(_rep_with_dealer(conn, rep["id"]))
-            result["using_initial_password"] = False
-            result["must_change_password"] = False
-            result["token"] = _create_rep_session(conn, rep["id"])
-            return jsonify(result)
-
-        if not rep:
-            # 아직 연결된 사원 레코드가 없어도 SKT 계정이면 여기서 처음 만들어 이어준다.
-            # SKT 계정도 같은 로그인 칸으로 보물찾기를 쓸 수 있게 하기 위해서다(요청: 2026-09-28).
+        if not rep or rep["password_hash"] is None:
+            # 사원이 아니거나(아직 없거나), 사원은 있지만 SKT 계정과 연결된 레코드(비밀번호 NULL)다.
+            # 두 경우 다 비밀번호는 admins 것만 본다 - 복사해두면 SKT 쪽 비밀번호를 바꿔도
+            # 여기 반영이 안 된다. SKT 계정도 같은 로그인 칸으로 보물찾기를 쓸 수 있게
+            # 하기 위해서다(요청: 2026-09-28).
             raw_username = (body.get("employee_code") or "").strip()
             admin = conn.execute("SELECT * FROM admins WHERE username = ?", (raw_username,)).fetchone()
-            if admin and (admin["role"] or "super") in SKT_ROLES:
-                if not check_password_hash(admin["password_hash"], password):
-                    return jsonify({"error": "INVALID_PASSWORD", "message": "비밀번호가 올바르지 않습니다."}), 401
-                rep_id = new_id()
-                conn.execute(
-                    """
-                    INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, created_at, must_change_password)
-                    VALUES (?, NULL, ?, ?, NULL, ?, 0)
-                    """,
-                    (rep_id, admin["name"] or admin["username"], normalize_employee_code(admin["username"]), now_iso()),
-                )
-                result = public_rep(_rep_with_dealer(conn, rep_id))
-                result["using_initial_password"] = False
-                result["must_change_password"] = False
-                result["token"] = _create_rep_session(conn, rep_id)
-                return jsonify(result)
-            return jsonify({"error": "UNREGISTERED_EMPLOYEE", "message": "등록되지 않은 고유ID입니다. 관리자에게 엑셀 등록을 요청하세요."}), 404
+            if not admin:
+                admin = conn.execute("SELECT * FROM admins WHERE UPPER(username) = ?", (employee_code,)).fetchone()
+            if not admin or (admin["role"] or "super") not in SKT_ROLES:
+                return jsonify({"error": "UNREGISTERED_EMPLOYEE", "message": "등록되지 않은 고유ID입니다. 관리자에게 엑셀 등록을 요청하세요."}), 404
+            if not check_password_hash(admin["password_hash"], password):
+                return jsonify({"error": "INVALID_PASSWORD", "message": "비밀번호가 올바르지 않습니다."}), 401
+            # 관리자(admin_sessions) 세션을 준다 - 그래야 같은 토큰으로 /inventory·/admin 도
+            # 다시 로그인할 필요 없이 SKT 계정으로 바로 인식된다. 연결된 사원 레코드는
+            # _rep_from_token 이 없으면 만들어서 이어준다.
+            token = _create_session(conn, admin["id"])
+            linked = _rep_from_token(conn, token)
+            result = public_rep(linked)
+            result["using_initial_password"] = False
+            result["must_change_password"] = bool(admin["must_change_password"])
+            result["token"] = token
+            return jsonify(result)
 
         stored = rep["password_hash"]
         if not stored:
@@ -2840,6 +2844,9 @@ def inventory_map():
     model_names = []
     for raw in request.args.getlist("model_name"):
         model_names.extend([p.strip() for p in str(raw).split(",") if p.strip()])
+    colors = []
+    for raw in request.args.getlist("color"):
+        colors.extend([p.strip() for p in str(raw).split(",") if p.strip()])
     pin_color = (request.args.get("pin_color") or "").strip()
     lat = lng = None
     bbox = None
@@ -2897,6 +2904,7 @@ def inventory_map():
             radius_km=radius_km,
             product_short=product_shorts,
             model_name=model_names,
+            color=colors,
             pin_color=pin_color,
         )
         if bbox or circle:
