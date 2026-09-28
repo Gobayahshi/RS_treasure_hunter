@@ -33,6 +33,10 @@
         <div class="multi-pick-menu hidden" id="modelNameMenu"></div>
       </div>
     </div>
+    <div class="inventory-holder-filter" id="holderFilterWrap">
+      <label><input type="checkbox" id="holderPartnerChk" checked /> 판매점</label>
+      <label><input type="checkbox" id="holderRetailChk" /> 직영점</label>
+    </div>
     <button type="button" id="mapLookupBtn">조회</button>
   </div>
   <nav id="chatNav" class="hidden">
@@ -43,11 +47,36 @@
         <option value="">전체 대리점</option>
       </select>
     </label>
+    <button type="button" id="registerStoreBtn" class="hidden">직영점 등록</button>
     <a class="muted small" id="chatAdminLink" href="admin">관리자</a>
     <span id="chatUser" class="muted small"></span>
     <button id="chatLogoutBtn">로그아웃</button>
   </nav>
 </header>
+
+<div id="retailStoreModal" class="modal-overlay hidden">
+  <div class="modal-box card">
+    <div class="between">
+      <h2>직영점 등록</h2>
+      <button type="button" id="retailStoreCloseBtn" class="link-btn">닫기</button>
+    </div>
+    <p class="muted small">
+      판매점(P코드) 마스터에 없는 직영점(D코드)을 등록하면 재고지도에 표시됩니다.
+      매장코드는 재고 엑셀의 '보유처매장코드'와 같은 값을 입력하세요.
+    </p>
+    <input id="retailStoreCode" type="text" placeholder="매장코드 (D코드, 예: D150510001)" autocomplete="off" />
+    <input id="retailStoreName" type="text" placeholder="매장명" autocomplete="off" />
+    <label id="retailStoreDealerWrap" class="hidden">
+      소속대리점
+      <input id="retailStoreDealerCode" type="text" placeholder="소속대리점코드 (예: D13469)" list="dealerCodeListInv" autocomplete="off" />
+      <datalist id="dealerCodeListInv"></datalist>
+    </label>
+    <input id="retailStoreAddress" type="text" placeholder="기본주소 (클릭하면 주소 검색)" autocomplete="off" readonly />
+    <input id="retailStoreDetailAddress" type="text" placeholder="상세주소 (동/층/호수)" autocomplete="off" />
+    <button type="button" id="retailStoreSubmitBtn" class="btn-primary">등록</button>
+    <p id="retailStoreMessage" class="muted small"></p>
+  </div>
+</div>
 
 <main>
   <section id="screen-chat-login" class="screen">
@@ -167,6 +196,7 @@
 </main>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="js/inventory-chat.js?v=20260828s"></script>
+<script src="https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
+<script src="js/inventory-chat.js?v=20260928a"></script>
 </body>
 </html>

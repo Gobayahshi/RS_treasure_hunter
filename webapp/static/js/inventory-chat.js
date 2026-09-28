@@ -37,6 +37,9 @@ let pickedModelNames = [];
 let mapPinColor = "";
 let mapAgedOnly = false;
 let catalogPicked = false;
+let mapIncludeRetail = false;
+let mapIncludePartner = true;
+let lastHqDealers = [];
 
 const FOCUS_CENTER = [37.55, 127.7];
 const FOCUS_ZOOM = 10;
@@ -246,6 +249,9 @@ function showLoggedIn(user) {
   const uploadBar = $("inventoryUploadBar");
   // SKT 직원은 조회 전용이라 업로드를 숨긴다. (예전 응답에는 can_upload 가 없어 기본 허용)
   if (uploadBar) uploadBar.classList.toggle("hidden", inventoryUser.can_upload === false);
+  const registerBtn = $("registerStoreBtn");
+  // 직영점 등록도 재고 업로드와 같은 권한(대리점 직원 누구나 + SKT는 총괄만)이다.
+  if (registerBtn) registerBtn.classList.toggle("hidden", inventoryUser.can_upload === false);
   const filterBar = $("inventoryFilterBar");
   if (filterBar) filterBar.classList.remove("hidden");
   $("chatUser").textContent = inventoryUserLabel(inventoryUser);
@@ -931,6 +937,96 @@ async function waitForUploadJob(jobId, file) {
   throw new Error("저장이 아직 끝나지 않았습니다. 잠시 후 새로고침해 보세요.");
 }
 
+function openRetailStoreModal() {
+  const modal = $("retailStoreModal");
+  if (!modal) return;
+  ["retailStoreCode", "retailStoreName", "retailStoreAddress", "retailStoreDetailAddress", "retailStoreDealerCode"].forEach(
+    (id) => {
+      if ($(id)) $(id).value = "";
+    }
+  );
+  const msg = $("retailStoreMessage");
+  if (msg) {
+    msg.textContent = "";
+    msg.classList.remove("error");
+  }
+  const dealerWrap = $("retailStoreDealerWrap");
+  if (dealerWrap) dealerWrap.classList.toggle("hidden", !inventoryUser.can_see_all);
+  if (inventoryUser.can_see_all) {
+    const datalist = $("dealerCodeListInv");
+    if (datalist) {
+      datalist.innerHTML = "";
+      for (const d of lastHqDealers) {
+        if (!d.dealer_code) continue;
+        const opt = document.createElement("option");
+        opt.value = d.dealer_code;
+        opt.textContent = d.dealer_name || d.dealer_code;
+        datalist.appendChild(opt);
+      }
+    }
+  }
+  modal.classList.remove("hidden");
+}
+
+function closeRetailStoreModal() {
+  const modal = $("retailStoreModal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function openAddressSearch() {
+  if (!window.daum || !window.daum.Postcode) {
+    const msg = $("retailStoreMessage");
+    if (msg) msg.textContent = "주소 검색을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.";
+    return;
+  }
+  new window.daum.Postcode({
+    oncomplete(data) {
+      const addr = data.roadAddress || data.jibunAddress || data.address || "";
+      $("retailStoreAddress").value = addr;
+      $("retailStoreDetailAddress").focus();
+    },
+  }).open();
+}
+
+async function handleRetailStoreSubmit() {
+  const msg = $("retailStoreMessage");
+  const btn = $("retailStoreSubmitBtn");
+  const storeCode = $("retailStoreCode").value.trim();
+  const name = $("retailStoreName").value.trim();
+  const address = $("retailStoreAddress").value.trim();
+  const detailAddress = $("retailStoreDetailAddress").value.trim();
+  const dealerCode = inventoryUser.can_see_all ? $("retailStoreDealerCode").value.trim() : "";
+  msg.classList.remove("error");
+  if (!storeCode || !name || !address) {
+    msg.textContent = "매장코드, 매장명, 기본주소를 입력해주세요.";
+    msg.classList.add("error");
+    return;
+  }
+  if (inventoryUser.can_see_all && !dealerCode) {
+    msg.textContent = "소속대리점코드를 입력해주세요.";
+    msg.classList.add("error");
+    return;
+  }
+  if (btn) btn.disabled = true;
+  msg.textContent = "등록하는 중...";
+  try {
+    const body = { store_code: storeCode, name, address, detail_address: detailAddress };
+    if (dealerCode) body.dealer_code = dealerCode;
+    const data = await api("/inventory/retail-store", { method: "POST", body: JSON.stringify(body) });
+    msg.classList.toggle("error", !data.geocoded);
+    msg.textContent = data.message || "등록했습니다.";
+    if (data.geocoded) {
+      setTimeout(closeRetailStoreModal, 900);
+      loadInventoryMap(lastCoords).catch(() => {});
+    }
+  } catch (err) {
+    msg.textContent = friendlyError(err);
+    msg.classList.add("error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function handleInventoryUpload() {
   const input = $("inventoryFile");
   const btn = $("inventoryUploadBtn");
@@ -1115,6 +1211,8 @@ function mapQueryParams(coords) {
   if (!mapProductShorts.length && !mapModelNames.length) params.set("model", "ALL");
   if (mapAgedOnly) params.set("aged_only", "1");
   if (mapPinColor) params.set("pin_color", mapPinColor);
+  params.set("include_partner", mapIncludePartner ? "1" : "0");
+  params.set("include_retail", mapIncludeRetail ? "1" : "0");
   if (coords) {
     params.set("lat", String(coords.lat));
     params.set("lng", String(coords.lng));
@@ -1437,6 +1535,7 @@ async function loadHqSummary() {
     const data = await api("/inventory/summary");
     const dealers = data.dealers || data.by_dealer || [];
     const uploads = data.uploads || [];
+    lastHqDealers = dealers;
     if (allMeta) {
       allMeta.textContent = `${Number(data.total_qty || 0).toLocaleString("ko-KR")}대 · ${Number(data.store_count || 0).toLocaleString("ko-KR")}곳`;
     }
@@ -1684,6 +1783,46 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("chatChangePasswordBtn")) $("chatChangePasswordBtn").addEventListener("click", handleChangePassword);
   if ($("chatPasswordLogoutBtn")) $("chatPasswordLogoutBtn").addEventListener("click", handleLogout);
   $("inventoryUploadBtn").addEventListener("click", handleInventoryUpload);
+  const registerBtn = $("registerStoreBtn");
+  if (registerBtn) registerBtn.addEventListener("click", openRetailStoreModal);
+  const retailCloseBtn = $("retailStoreCloseBtn");
+  if (retailCloseBtn) retailCloseBtn.addEventListener("click", closeRetailStoreModal);
+  const retailAddress = $("retailStoreAddress");
+  if (retailAddress) retailAddress.addEventListener("click", openAddressSearch);
+  const retailSubmitBtn = $("retailStoreSubmitBtn");
+  if (retailSubmitBtn) retailSubmitBtn.addEventListener("click", handleRetailStoreSubmit);
+  const retailModal = $("retailStoreModal");
+  if (retailModal) {
+    retailModal.addEventListener("click", (e) => {
+      if (e.target === retailModal) closeRetailStoreModal();
+    });
+  }
+  const holderPartnerChk = $("holderPartnerChk");
+  const holderRetailChk = $("holderRetailChk");
+  if (holderPartnerChk) {
+    holderPartnerChk.addEventListener("change", () => {
+      mapIncludePartner = holderPartnerChk.checked;
+      addThinking();
+      loadInventoryMap(lastCoords)
+        .then(() => removeThinking())
+        .catch((err) => {
+          removeThinking();
+          addBotError(err);
+        });
+    });
+  }
+  if (holderRetailChk) {
+    holderRetailChk.addEventListener("change", () => {
+      mapIncludeRetail = holderRetailChk.checked;
+      addThinking();
+      loadInventoryMap(lastCoords)
+        .then(() => removeThinking())
+        .catch((err) => {
+          removeThinking();
+          addBotError(err);
+        });
+    });
+  }
   const lookupBtn = $("mapLookupBtn");
   if (lookupBtn) lookupBtn.addEventListener("click", applyMapLookup);
   const productBtn = $("productShortBtn");

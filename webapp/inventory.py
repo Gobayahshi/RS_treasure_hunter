@@ -490,12 +490,14 @@ def _empty_map(
     region: str,
     keyword: str,
     dealer_id: str = "",
+    include_partner: bool = True,
 ) -> dict:
     return {
         "model": model,
         "as_of_date": "",
         "filename": "",
         "include_retail": include_retail,
+        "include_partner": include_partner,
         "region": region,
         "keyword": keyword,
         "dealer_id": dealer_id,
@@ -719,6 +721,7 @@ def inventory_map_points(
     conn,
     model_prefix: str,
     include_retail: bool = False,
+    include_partner: bool = True,
     region: str | None = None,
     lat: float | None = None,
     lng: float | None = None,
@@ -741,8 +744,7 @@ def inventory_map_points(
         model = ",".join(wanted_shorts)
     else:
         model = ",".join(models) if models else "all"
-    holders = ("partner", "retail") if include_retail else ("partner",)
-    placeholders = ",".join("?" * len(holders))
+    holders = tuple(h for h, want in (("partner", include_partner), ("retail", include_retail)) if want)
     wanted_region = (region or "").strip()
     wanted_keyword = (keyword or "").strip()
     wanted_dealer = (dealer_id or "").strip()
@@ -755,9 +757,17 @@ def inventory_map_points(
     if radius_m is not None and radius_m <= 0:
         radius_m = None
 
+    if not holders:
+        return _empty_map(
+            model, include_retail, wanted_region, wanted_keyword, wanted_dealer, include_partner
+        )
+    placeholders = ",".join("?" * len(holders))
+
     upload_ids = _latest_upload_ids(conn, wanted_dealer or None)
     if not upload_ids:
-        return _empty_map(model, include_retail, wanted_region, wanted_keyword, wanted_dealer)
+        return _empty_map(
+            model, include_retail, wanted_region, wanted_keyword, wanted_dealer, include_partner
+        )
 
     up_ph = ",".join("?" * len(upload_ids))
     model_wheres = []
@@ -925,6 +935,7 @@ def inventory_map_points(
         "as_of_date": ",".join(as_of_dates),
         "filename": ", ".join(u.get("filename") or "" for u in uploads),
         "include_retail": include_retail,
+        "include_partner": include_partner,
         "region": wanted_region,
         "keyword": wanted_keyword,
         "dealer_id": wanted_dealer,
@@ -1477,3 +1488,88 @@ def inventory_dealer_roster(conn) -> dict:
         "pending_count": len(roster) - len(uploaded),
         "dealers": roster,
     }
+
+
+# ---------------------------------------------------------------------------
+# 모델 조회 (펫네임 → 대표모델 매핑)
+#
+# 영업정책/1.이동전화/모델 조회.xlsx 를 관리자 화면에서 그대로 업로드해 채운다.
+# 한 달에 한 번 정도 전체를 갈아엎는 용도라, 업로드마다 기존 행을 지우고 새로 넣는다
+# (replace_model_lookup). 재고 챗봇은 "플립7", "갤럭시 S25" 처럼 사용자가 줄여 부른
+# 말을 대표모델 코드(SM-Fxxx 등)로 바꾸는 데만 이 표를 쓴다 — 재고 대수 자체는 여전히
+# inventory_items 에서만 센다.
+# ---------------------------------------------------------------------------
+
+
+def replace_model_lookup(conn, rows: list[dict[str, str]]) -> int:
+    """모델 조회 표를 통째로 갈아엎는다. 되돌릴 수 없다."""
+    conn.execute("DELETE FROM model_lookup")
+    conn.executemany(
+        "INSERT INTO model_lookup (model_name, canonical_model, petname) VALUES (?, ?, ?)",
+        [
+            (row.get("model_name") or "", row.get("canonical_model") or "", row.get("petname") or "")
+            for row in rows
+            if row.get("model_name") and row.get("canonical_model")
+        ],
+    )
+    return conn.execute("SELECT COUNT(*) AS cnt FROM model_lookup").fetchone()["cnt"]
+
+
+def set_model_lookup_meta(conn, filename: str, row_count: int, updated_at: str) -> None:
+    for key, value in (
+        ("model_lookup_filename", filename or ""),
+        ("model_lookup_row_count", str(row_count)),
+        ("model_lookup_updated_at", updated_at),
+    ):
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+def model_lookup_status(conn) -> dict:
+    settings = {
+        row["key"]: row["value"]
+        for row in conn.execute(
+            "SELECT key, value FROM app_settings WHERE key IN "
+            "('model_lookup_filename', 'model_lookup_row_count', 'model_lookup_updated_at')"
+        )
+    }
+    count = conn.execute("SELECT COUNT(*) AS cnt FROM model_lookup").fetchone()["cnt"]
+    return {
+        "row_count": int(count or 0),
+        "filename": settings.get("model_lookup_filename") or "",
+        "updated_at": settings.get("model_lookup_updated_at") or "",
+    }
+
+
+_PETNAME_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
+
+
+def resolve_petname_models(conn, text: str) -> list[str]:
+    """질문 속 펫네임(예: '플립7', '갤럭시 S25')을 대표모델 코드로 바꾼다.
+
+    세대 숫자가 없는 토큰('폴드', '갤럭시'처럼)은 다른 세대와 통째로 겹치기 쉬워 건너뛴다.
+    후보가 서로 다른 대표모델 2개 이상과 겹치면(예: 베이직/플러스/울트라를 구분 못하면)
+    임의로 고르지 않고 빈 목록을 돌려준다 — 모델명_호칭_정규화_규칙.md 4번 규칙과 같다.
+    """
+    tokens = {t for t in _PETNAME_TOKEN_RE.findall(text or "") if re.search(r"\d", t)}
+    if not tokens:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT canonical_model, petname FROM model_lookup WHERE TRIM(COALESCE(petname, '')) != ''"
+        ).fetchall()
+    except Exception:
+        return []
+    if not rows:
+        return []
+    matched: set[str] = set()
+    for row in rows:
+        petname_compact = re.sub(r"\s+", "", (row["petname"] or "")).lower()
+        if not petname_compact:
+            continue
+        if any(token.lower() in petname_compact for token in tokens):
+            matched.add(row["canonical_model"])
+    return sorted(matched) if len(matched) == 1 else []

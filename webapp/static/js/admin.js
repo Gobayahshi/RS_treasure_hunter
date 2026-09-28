@@ -1073,20 +1073,28 @@ let storeSearchTimer = null;
 
 function handleStoreSearchInput() {
   if (storeSearchTimer) clearTimeout(storeSearchTimer);
-  storeSearchTimer = setTimeout(() => loadStores($("storeSearch").value.trim()), 300);
+  const typeSel = $("storeTypeFilter");
+  storeSearchTimer = setTimeout(
+    () => loadStores($("storeSearch").value.trim(), typeSel ? typeSel.value : ""),
+    300
+  );
 }
 
-async function loadStores(q = "") {
+async function loadStores(q = "", type = "") {
   const container = $("storeList");
-  if (!q) {
-    container.innerHTML = '<p class="muted small">검색어를 입력하면 판매점을 찾습니다.</p>';
+  if (!q && !type) {
+    container.innerHTML = '<p class="muted small">검색어를 입력하거나 매장 종류를 골라 판매점을 찾습니다.</p>';
     return;
   }
-  const data = await api(`/stores?limit=50&q=${encodeURIComponent(q)}`);
+  const params = new URLSearchParams({ limit: "50" });
+  if (q) params.set("q", q);
+  if (type) params.set("type", type);
+  const data = await api(`/stores?${params}`);
   container.innerHTML = "";
   const summary = document.createElement("p");
   summary.className = "muted small";
-  summary.textContent = `"${q}" 검색 결과 ${data.matched}곳 중 ${data.items.length}곳 표시 (전체 판매점 ${data.total}곳)`;
+  const label = q ? `"${q}" 검색 결과` : "조회 결과";
+  summary.textContent = `${label} ${data.matched}곳 중 ${data.items.length}곳 표시 (전체 판매점 ${data.total}곳)`;
   container.appendChild(summary);
   if (data.items.length === 0) {
     const empty = document.createElement("p");
@@ -1177,8 +1185,46 @@ async function reloadAll() {
     loadSettings(),
     loadPlanted(),
     loadAccounts(),
+    loadModelLookupStatus(),
     $("inventoryMap") ? loadInventoryMap() : Promise.resolve(),
   ]);
+}
+
+async function loadModelLookupStatus() {
+  const el = $("modelLookupStatus");
+  if (!el) return;
+  try {
+    const status = await api("/admin/model-lookup");
+    if (!status.row_count) {
+      el.textContent = "아직 업로드된 모델 조회 표가 없습니다. 펫네임 질문은 그대로 규칙 기반으로 처리됩니다.";
+      return;
+    }
+    const updated = status.updated_at ? formatVisitTime(status.updated_at) : "";
+    el.textContent = `${escHtml(status.filename || "")} · ${status.row_count.toLocaleString()}행${updated ? ` · ${updated} 업데이트` : ""}`;
+  } catch (err) {
+    el.textContent = String(err.message || err);
+  }
+}
+
+async function handleModelLookupUpload() {
+  const input = $("modelLookupFile");
+  const msg = $("modelLookupMsg");
+  const file = input && input.files && input.files[0];
+  if (!file) {
+    msg.textContent = "파일을 선택해주세요.";
+    return;
+  }
+  const form = new FormData();
+  form.append("file", file);
+  msg.textContent = "업로드 중...";
+  try {
+    await api("/admin/model-lookup", { method: "POST", body: form });
+    input.value = "";
+    msg.textContent = "업로드했습니다. 기존 내용은 모두 새 파일로 바뀌었습니다.";
+    await loadModelLookupStatus();
+  } catch (err) {
+    msg.textContent = String(err.message || err);
+  }
 }
 
 async function handleAddStore() {
@@ -1220,6 +1266,63 @@ async function handleAddStore() {
     loadStores();
   } catch (err) {
     msg.textContent = String(err.message || err);
+  }
+}
+
+function openAdminAddressSearch() {
+  const msg = $("retailStoreMessageAdmin");
+  if (!window.daum || !window.daum.Postcode) {
+    if (msg) msg.textContent = "주소 검색을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.";
+    return;
+  }
+  new window.daum.Postcode({
+    oncomplete(data) {
+      const addr = data.roadAddress || data.jibunAddress || data.address || "";
+      $("retailStoreAddressAdmin").value = addr;
+      $("retailStoreDetailAddressAdmin").focus();
+    },
+  }).open();
+}
+
+async function handleAddRetailStore() {
+  const storeCode = $("retailStoreCodeAdmin").value.trim();
+  const name = $("retailStoreNameAdmin").value.trim();
+  const dealerCode = $("retailStoreDealerCodeAdmin").value.trim();
+  const address = $("retailStoreAddressAdmin").value.trim();
+  const detailAddress = $("retailStoreDetailAddressAdmin").value.trim();
+  const msg = $("retailStoreMessageAdmin");
+  const btn = $("retailStoreSubmitBtnAdmin");
+
+  if (!storeCode || !name || !address || !dealerCode) {
+    msg.textContent = "매장코드, 매장명, 소속대리점코드, 기본주소를 입력해주세요.";
+    return;
+  }
+  if (btn) btn.disabled = true;
+  msg.textContent = "등록하는 중...";
+  try {
+    const data = await api("/inventory/retail-store", {
+      method: "POST",
+      body: JSON.stringify({
+        store_code: storeCode,
+        name,
+        address,
+        detail_address: detailAddress || undefined,
+        dealer_code: dealerCode,
+      }),
+    });
+    msg.textContent = data.message || "등록했습니다.";
+    if (data.geocoded) {
+      $("retailStoreCodeAdmin").value = "";
+      $("retailStoreNameAdmin").value = "";
+      $("retailStoreDealerCodeAdmin").value = "";
+      $("retailStoreAddressAdmin").value = "";
+      $("retailStoreDetailAddressAdmin").value = "";
+      loadStores($("storeSearch").value.trim(), $("storeTypeFilter").value);
+    }
+  } catch (err) {
+    msg.textContent = String(err.message || err);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1404,6 +1507,9 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("dealerSearch")) $("dealerSearch").addEventListener("input", renderDealerSearch);
   if ($("addRepBtn")) $("addRepBtn").addEventListener("click", handleAddRep);
   if ($("storeSearch")) $("storeSearch").addEventListener("input", handleStoreSearchInput);
+  if ($("storeTypeFilter")) $("storeTypeFilter").addEventListener("change", handleStoreSearchInput);
+  if ($("retailStoreAddressAdmin")) $("retailStoreAddressAdmin").addEventListener("click", openAdminAddressSearch);
+  if ($("retailStoreSubmitBtnAdmin")) $("retailStoreSubmitBtnAdmin").addEventListener("click", handleAddRetailStore);
   $("importBtn").addEventListener("click", handleImport);
   const storeImportBtn = $("storeImportBtn");
   if (storeImportBtn) storeImportBtn.addEventListener("click", handleStoreImport);
@@ -1418,5 +1524,6 @@ document.addEventListener("DOMContentLoaded", () => {
       if (e.key === "Enter") loadInventoryMap();
     });
   }
+  if ($("modelLookupUploadBtn")) $("modelLookupUploadBtn").addEventListener("click", handleModelLookupUpload);
   restoreSession();
 });

@@ -30,18 +30,23 @@ from excel_import import (
     normalize_employee_code,
     normalize_phone_last4,
     normalize_store_code,
+    parse_model_lookup_xlsx,
     parse_uploads,
     upsert_masters,
 )
-from geocode import geocode_missing_stores
+from geocode import geocode_address, geocode_missing_stores
 from inventory import (
+    classify_holder,
     inventory_dealer_roster,
     inventory_map_points,
     inventory_model_breakdown,
     inventory_model_catalog,
     inventory_overview,
+    model_lookup_status,
     parse_inventory_file,
     replace_inventory,
+    replace_model_lookup,
+    set_model_lookup_meta,
 )
 from inventory_chat import ask_inventory
 
@@ -1726,6 +1731,7 @@ def list_stores():
     관리자 화면이 매번 전체를 내려받아 30곳만 보여주던 걸 고치는 것.
     """
     q = (request.args.get("q") or "").strip()
+    store_type = (request.args.get("type") or "").strip().lower()
     try:
         limit = int(request.args.get("limit", 30))
     except (TypeError, ValueError):
@@ -1735,15 +1741,22 @@ def list_stores():
     with db_session() as conn:
         total = conn.execute("SELECT COUNT(*) AS c FROM stores").fetchone()["c"]
 
-        where = ""
+        conds = []
         params: list = []
         if q:
             like = f"%{q}%"
-            where = """
-                WHERE s.name LIKE ? OR s.store_code LIKE ? OR s.address LIKE ?
-                   OR s.detail_address LIKE ? OR d.name LIKE ? OR d.dealer_code LIKE ?
-            """
-            params = [like, like, like, like, like, like]
+            conds.append(
+                """
+                (s.name LIKE ? OR s.store_code LIKE ? OR s.address LIKE ?
+                   OR s.detail_address LIKE ? OR d.name LIKE ? OR d.dealer_code LIKE ?)
+                """
+            )
+            params.extend([like, like, like, like, like, like])
+        if store_type == "partner":
+            conds.append("UPPER(COALESCE(s.store_code, '')) LIKE 'P%'")
+        elif store_type == "retail":
+            conds.append("(UPPER(COALESCE(s.store_code, '')) LIKE 'D%' AND LENGTH(s.store_code) > 6)")
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
 
         rows = conn.execute(
             f"""
@@ -1758,7 +1771,7 @@ def list_stores():
         ).fetchall()
 
         matched = total
-        if q:
+        if where:
             matched = conn.execute(
                 f"""
                 SELECT COUNT(*) AS c
@@ -1776,6 +1789,7 @@ def list_stores():
                 "matched": matched,
                 "limit": limit,
                 "query": q,
+                "type": store_type,
             }
         )
 
@@ -1826,6 +1840,95 @@ def create_store():
             (store_id,),
         ).fetchone()
         return jsonify(row_to_dict(store)), 201
+
+
+@app.route("/api/inventory/retail-store", methods=["POST"])
+@require_inventory_uploader
+def create_retail_store():
+    """직영점(D코드)은 판매점 마스터에 없어 재고지도에 안 뜬다. 대리점 직원/SKT가 주소만으로 직접 등록한다.
+
+    기존 POST /api/stores 는 총괄 전용 + lat/lng 직접 입력이라 이 용도로 못 쓴다.
+    여기서는 주소만 받아 geocode.geocode_address 로 좌표를 바로 찾는다.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    store_code = normalize_store_code(body.get("store_code"))
+    name = (body.get("name") or "").strip()
+    address = (body.get("address") or "").strip()
+    detail_address = (body.get("detail_address") or "").strip()
+    if not store_code or not name or not address:
+        return jsonify(
+            {"error": "MISSING_FIELDS", "message": "매장코드, 매장명, 기본주소가 필요합니다."}
+        ), 400
+    if classify_holder(store_code) != "retail":
+        return jsonify(
+            {
+                "error": "NOT_RETAIL_CODE",
+                "message": "직영점(D코드, 예: D150510001) 매장코드만 이 화면으로 등록할 수 있습니다.",
+            }
+        ), 400
+
+    user = g.inventory_user
+    dealer_id = None
+    if _is_dealer_user(user):
+        # 요청 본문의 소속대리점 값은 믿지 않는다. 토큰 주인의 대리점으로 강제한다.
+        dealer_id = user.get("dealer_id") or ""
+        if not dealer_id:
+            return jsonify({"error": "NO_DEALER", "message": "소속 대리점이 없는 계정입니다."}), 403
+    else:
+        dealer_code = (body.get("dealer_code") or "").strip()
+        if not dealer_code:
+            return jsonify(
+                {"error": "DEALER_CODE_REQUIRED", "message": "소속 대리점코드를 입력하세요."}
+            ), 400
+        with db_session() as conn:
+            dealer = conn.execute(
+                "SELECT * FROM dealers WHERE dealer_code = ?", (dealer_code,)
+            ).fetchone()
+        if not dealer:
+            return jsonify({"error": "DEALER_NOT_FOUND", "message": "대리점을 찾지 못했습니다."}), 404
+        dealer_id = dealer["id"]
+
+    geocoded = geocode_address(address)
+
+    with db_session() as conn:
+        existing = conn.execute("SELECT * FROM stores WHERE store_code = ?", (store_code,)).fetchone()
+        if geocoded:
+            lat, lng = geocoded.lat, geocoded.lng
+        elif existing:
+            lat, lng = existing["lat"], existing["lng"]
+        else:
+            lat, lng = 0.0, 0.0
+
+        if existing:
+            store_id = existing["id"]
+            conn.execute(
+                """
+                UPDATE stores
+                SET name = ?, address = ?, detail_address = ?, dealer_id = ?, lat = ?, lng = ?
+                WHERE id = ?
+                """,
+                (name, address, detail_address, dealer_id, lat, lng, store_id),
+            )
+        else:
+            store_id = new_id()
+            conn.execute(
+                """
+                INSERT INTO stores (
+                    id, dealer_id, store_code, name, address, detail_address, lat, lng, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (store_id, dealer_id, store_code, name, address, detail_address, lat, lng, now_iso()),
+            )
+        store = conn.execute(
+            """
+            SELECT s.*, d.dealer_code, d.name as dealer_name
+            FROM stores s LEFT JOIN dealers d ON d.id = s.dealer_id WHERE s.id = ?
+            """,
+            (store_id,),
+        ).fetchone()
+
+    message = "등록했습니다." if geocoded else "등록했지만 주소로 좌표를 찾지 못했습니다. 주소를 확인하거나 관리자에게 좌표 변환을 요청하세요."
+    return jsonify({"store": row_to_dict(store), "geocoded": bool(geocoded), "message": message}), 201
 
 
 # ---------------------------------------------------------------------------
@@ -2577,6 +2680,42 @@ def import_excel():
     return jsonify(summary), 200
 
 
+@app.route("/api/admin/model-lookup")
+@require_skt
+def get_model_lookup():
+    with db_session() as conn:
+        return jsonify(model_lookup_status(conn))
+
+
+@app.route("/api/admin/model-lookup", methods=["POST"])
+@require_admin
+def upload_model_lookup():
+    """모델 조회(펫네임→대표모델) 표를 통째로 갈아엎는다. 되돌릴 수 없다.
+
+    한 달에 한 번 정도 전체 파일이 바뀌므로, 수정하지 않고 전체 교체만 지원한다.
+    """
+    upload = request.files.get("file") or (request.files.getlist("files") or [None])[0]
+    if not upload:
+        return jsonify({"error": "모델 조회 xlsx 파일을 올려주세요."}), 400
+    filename = upload.filename or "model_lookup.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        return jsonify({"error": f"{filename}: .xlsx 만 지원합니다."}), 400
+    data = upload.read()
+    if not data:
+        return jsonify({"error": "빈 파일입니다."}), 400
+    try:
+        rows = parse_model_lookup_xlsx(data)
+    except Exception as exc:
+        return jsonify({"error": f"엑셀을 읽지 못했습니다: {exc}"}), 400
+    if not rows:
+        return jsonify({"error": "모델명/대표모델 열을 찾지 못했습니다."}), 400
+    with db_session() as conn:
+        row_count = replace_model_lookup(conn, rows)
+        set_model_lookup_meta(conn, filename, row_count, now_iso())
+        status = model_lookup_status(conn)
+    return jsonify(status), 200
+
+
 @app.route("/api/inventory/excel", methods=["POST"])
 @require_inventory_uploader
 def import_inventory():
@@ -2648,6 +2787,8 @@ def inventory_upload_status():
 def inventory_map():
     model = (request.args.get("model") or "").strip()
     include_retail = (request.args.get("include_retail") or "").strip() in {"1", "true", "yes"}
+    # 판매점(P코드)은 기본으로 켜져 있다. 명시적으로 0/false/no 를 보낼 때만 끈다.
+    include_partner = (request.args.get("include_partner") or "1").strip() not in {"0", "false", "no"}
     region = (request.args.get("region") or "").strip()
     keyword = (request.args.get("keyword") or "").strip()
     dealer_id = _scoped_dealer_id() or (request.args.get("dealer_id") or "").strip()
@@ -2704,6 +2845,7 @@ def inventory_map():
             conn,
             model,
             include_retail,
+            include_partner,
             region=region,
             lat=lat,
             lng=lng,

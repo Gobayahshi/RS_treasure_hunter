@@ -738,6 +738,55 @@ body.inventory-assist .topbar .brand-logo {
   width: auto;
 }
 
+#inventoryFilterBar .inventory-holder-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  font-size: 13px;
+  align-self: flex-end;
+}
+
+#inventoryFilterBar .inventory-holder-filter label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#inventoryFilterBar .inventory-holder-filter input {
+  width: auto;
+  margin: 0;
+}
+
+/* 매장 직접 등록(직영점) 모달. 여러 화면에서 재사용할 수 있게 프로젝트 전용 클래스로 두지 않는다. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.modal-overlay.hidden {
+  display: none;
+}
+
+.modal-box {
+  max-width: 420px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-box input {
+  margin-top: 8px;
+}
+
 body.inventory-assist main {
   flex: 1;
   min-height: 0;
