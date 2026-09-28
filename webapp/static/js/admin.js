@@ -1329,6 +1329,29 @@ async function handleImport() {
   }
 }
 
+async function handleStoreImport() {
+  const input = $("storeExcelFiles");
+  const msg = $("storeImportMessage");
+  const resultBox = $("storeImportResult");
+  if (!input || !input.files.length) {
+    if (msg) msg.textContent = "xlsx 파일을 선택해주세요.";
+    return;
+  }
+  const form = new FormData();
+  for (const file of input.files) form.append("files", file);
+  msg.textContent = "올리는 중... 주소로 좌표를 변환하므로 매장이 많으면 시간이 걸릴 수 있습니다.";
+  resultBox.classList.add("hidden");
+  try {
+    const data = await api("/import/excel", { method: "POST", body: form });
+    msg.textContent = "업로드가 완료되었습니다.";
+    resultBox.textContent = formatImportSummary(data);
+    resultBox.classList.remove("hidden");
+    await reloadAll();
+  } catch (err) {
+    msg.textContent = String(err.message || err);
+  }
+}
+
 function startGeocodePolling() {
   if (geocodeTimer) clearInterval(geocodeTimer);
   geocodeTimer = window.setInterval(() => {
@@ -1382,6 +1405,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("addRepBtn")) $("addRepBtn").addEventListener("click", handleAddRep);
   if ($("storeSearch")) $("storeSearch").addEventListener("input", handleStoreSearchInput);
   $("importBtn").addEventListener("click", handleImport);
+  const storeImportBtn = $("storeImportBtn");
+  if (storeImportBtn) storeImportBtn.addEventListener("click", handleStoreImport);
+  const storeTemplateBtn = $("storeTemplateBtn");
+  if (storeTemplateBtn) storeTemplateBtn.addEventListener("click", handleTemplateDownload);
   if ($("inventoryMapBtn")) $("inventoryMapBtn").addEventListener("click", () => loadInventoryMap());
   if ($("inventoryNearestBtn")) $("inventoryNearestBtn").addEventListener("click", handleInventoryNearest);
   if ($("inventoryRegionChips")) $("inventoryRegionChips").addEventListener("click", handleInventoryRegionClick);

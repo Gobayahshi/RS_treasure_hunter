@@ -143,6 +143,24 @@
     </section>
 
     <section class="screen" data-tab="stores" data-super-only>
+      <h2>판매점 리스트 업로드 (월간)</h2>
+      <div class="card">
+        <p class="muted small">
+          판매점 전체 리스트(xlsx)를 올립니다. 헤더: <strong>판매점코드 · 판매점명 · 기본주소 · 상세주소 · 소속대리점ID</strong>.
+          판매점코드가 매장 고유키라 같은 코드를 다시 올리면 수정됩니다. 기본주소로 GPS 좌표를 잡고, 상세주소는 표시용입니다.
+        </p>
+        <p class="muted small">
+          매장이 많으면 좌표 변환(지오코딩)은 백그라운드로 돌아갑니다. 진행률은 아래 "좌표 변환" 카드에서 확인하세요.
+        </p>
+        <button id="storeTemplateBtn" class="btn-secondary">양식 다운로드</button>
+        <input id="storeExcelFiles" type="file" accept=".xlsx" multiple />
+        <button id="storeImportBtn" class="btn-primary">판매점 리스트 올리기</button>
+        <p id="storeImportMessage" class="muted small"></p>
+        <pre id="storeImportResult" class="import-result hidden"></pre>
+      </div>
+    </section>
+
+    <section class="screen" data-tab="stores" data-super-only>
       <h2>판매점 빠른 등록 (GPS 테스트용)</h2>
       <div class="card">
         <input id="storeCode" type="text" placeholder="판매점코드" />
