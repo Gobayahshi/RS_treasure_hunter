@@ -74,6 +74,10 @@ webapp/
 - **세 화면(`/`, `/inventory`, `/notices`)의 로그인 카드를 같은 디자인으로 통일했다** (2026-09-29 요청, 사용자가 디자인 캔버스로 직접 시안을 확정). 로고(`img/rs-team-logo.png`, 이미 `/inventory`가 쓰던 것과 동일 파일) + 타이틀 "■ Route Sale 활동 지원 ■" + "하나의 아이디로 보물찾기 · AI재고Map · 공지사항을 모두 이용합니다" 문구 + 로그인 후 뭘 쓸 수 있는지 보여주는 아이콘 3개(🏆/📦/📣) + "since 2021 · 수도권 RS팀" 푸터를 세 화면의 로그인 카드(`#screen-login`, `#screen-chat-login`, `#screen-notice-login`)에 각각 넣었다. `style.css`에 `.rs-unified-login`/`.rs-login-*` 클래스를 새로 추가(기존 전역 클래스는 안 건드림, 2026-09-18 원칙 그대로).
   - **로그인 로직·필드 id는 그대로 두고 디자인만 맞췄다** — 세 화면 다 원래 자기 input id(`loginCode`/`chatUsername`/`noticeUsername` 등)와 JS 핸들러를 그대로 쓴다. "화면을 하나로 합쳐달라"는 요청을 인증 흐름 통합이 아니라 **로그인 카드 디자인 통일**로 해석했다 — 인증 흐름 자체(각자 다른 API를 부르는 것)를 하나로 합치는 건 더 큰 작업이라 이번엔 안 건드렸다.
   - 이 작업은 어제(2026-09-28) 프로젝트 2와 `app.py`/`style.css`/`inventory.html`을 동시에 고치다 파일이 두 번 덮어써진 사고가 있었던 직후라, 워크트리(`worktree-unified-login`)에서 분리해서 진행했다.
+- **어느 화면에 먼저 로그인했든 나머지 화면도 다시 안 물어본다** (2026-09-29, 바로 다음 요청 — "로그인 흐름도 하나로"). `/inventory`·`/notices`는 원래도 `rs_admin_token`/`rs_rep_token` 둘 다 확인해서 됐지만, `/`(app.js)만 `rs_rep_token`만 봤다 — SKT 계정으로 `/inventory`에 먼저 로그인하면 `/`에 다시 로그인해야 했다. `app.js`에 `tryRestoreFromAdminToken()`을 추가해, `rs_rep_token`이 없으면 `rs_admin_token`으로 `/api/auth/me`를 한 번 시도한다(위 SKT 로그인 브리지가 그대로 받아준다). 성공하면 `usingAdminToken = true`로 표시해두고 그 토큰을 계속 쓴다.
+  - **로그아웃도 어느 쪽 토큰을 쓰고 있었는지에 따라 갈린다.** `usingAdminToken`이면 `/api/admin/logout`(`X-Admin-Token`)으로 실제 `admin_sessions` 행을 지우고 `rs_admin_token`을 지운다 — 기존처럼 무조건 `/api/auth/logout`(`rep_sessions`만 지움)을 부르면 SKT 브리지 세션은 서버에 그대로 남는다.
+  - **로그인 "제출" API 자체는 안 합쳤다** — `/`는 여전히 `/api/auth/login`, `/inventory`·`/notices`는 여전히 `/api/inventory/login`을 부른다. 이번엔 "이미 로그인돼 있으면 또 안 물어본다"만 완성했고, 세 화면이 진짜 하나의 로그인 엔드포인트를 쓰게 합치는 건 더 큰 작업이라 남겨뒀다.
+  - 이것도 `app.js`를 고치는 작업이라(프로젝트 2가 MapLibre 작업으로 자주 건드리는 파일) 워크트리(`worktree-unify-login-flow`)에서 분리해서 진행했다.
 - 서버 데코레이터: `require_admin`(총괄) · `require_skt`(총괄+직원, 조회) · `require_rep`(영업사원 본인) · `require_inventory_user` · `require_inventory_uploader`
 - 세션: SKT는 `admin_sessions` + 헤더 `X-Admin-Token`. 사원은 `rep_sessions` + `X-Rep-Token` (재고 화면은 `X-Admin-Token` 헤더로 보내도 사원 토큰을 인정한다).
 - **요청 본문의 `rep_id` 같은 신원 값은 믿지 않는다.** 항상 토큰의 주인을 쓴다.
@@ -170,8 +174,7 @@ webapp/
 - 서버에서 최소 샘플 수와 샘플 간격 검증 (지금은 샘플 1개로도 통과 가능).
 - R1(가짜 위치)은 웹에서 판별할 수 없다. 필요하면 네이티브 앱/PWA 검토.
 - 아이디어: 체화 재고(30일+)가 있는 매장에 rare 보물을 자동 스폰 (프로젝트 2와 연결).
-- SKT 계정의 `/` 로그인은 아직 `rs_admin_token` 공유 SSO에 안 들어가 있다 — `/admin`이나 `/inventory`에 이미 로그인해 있어도 `/`는 따로 로그인해야 한다(app.js가 `rs_rep_token`만 본다). 필요해지면 `/inventory`의 `getStoredTokens()` 패턴을 app.js에도 넣을 것.
-- 로그인 카드 디자인은 통일했지만, 세 화면이 각자 다른 로그인 API(`/api/auth/login`, `/api/inventory/login` 두 번)를 부르는 건 그대로다. 진짜 "한 번 로그인하면 다 된다"를 완성하려면 이 인증 흐름 자체를 합치는 다음 단계가 필요하다(범위가 커서 이번엔 디자인만).
+- 세 화면 다 여전히 각자 다른 로그인 API를 부른다(`/api/auth/login` vs `/api/inventory/login`) — 로그인 "제출" 자체를 하나의 엔드포인트로 합치는 건 아직 안 했다. 지금은 "이미 다른 화면에 로그인돼 있으면 다시 묻지 않는다"만 됐다(아래 참고).
 
 ---
 
@@ -280,5 +283,6 @@ webapp/
 - 2026-09-24: `/admin` 탭 재구성 — "매장 마스터"를 "판매점 위치"로 이름 변경, "계정 · 공통"에서 재고 엑셀/대리점 목록 섹션 제거, 향후 기능을 담을 "재고지도 운영" 탭(플레이스홀더) 추가.
 - 2026-09-24: `/admin` 2차 정리 — 엑셀 마스터 업로드를 "계정 · 공통" 탭으로 이동, 판매점/영업사원 목록 모두 검색 전엔 아무것도 안 보이게 통일, "대리점" 검색·수정·삭제 섹션 신설(`PATCH /api/dealers/<id>` 추가), 랭킹보드를 영업사원 상위 10 + 대리점 전체로 분리(`GET /api/points` 응답이 배열에서 `{reps, dealers}`로 바뀜), SKT 계정 생성에 총괄/직원 구분(`role`) 추가.
 - 2026-09-28: SKT 계정도 `/`(보물찾기)에 자기 아이디로 로그인 가능하게 변경, 세션을 관리자 세션으로 발급해 `/inventory`에서 다시 로그인하라고 뜨던 버그 수정.
-- 2026-09-29: 세 화면(`/`, `/inventory`, `/notices`) 로그인 카드 디자인 통일(로고·타이틀·앱 3개 안내 아이콘), 사용자가 디자인 캔버스로 시안 확정 후 반영. 인증 흐름 자체는 아직 화면마다 따로다.
+- 2026-09-29: 세 화면(`/`, `/inventory`, `/notices`) 로그인 카드 디자인 통일(로고·타이틀·앱 3개 안내 아이콘), 사용자가 디자인 캔버스로 시안 확정 후 반영.
+- 2026-09-29: `/`도 `rs_admin_token`으로 자동 로그인되게 고쳐서, 세 화면 중 어디에 먼저 로그인해도 나머지에서 다시 안 물어보게 됐다(로그인 제출 API 자체는 아직 화면마다 다름).
 - 로드맵 후보: 보물찾기 운영 준비(규칙 튜닝) → 두 기능 연결(체화 재고 → rare 보물) → 판매점 입력(프로젝트 3).

@@ -188,13 +188,41 @@ function getCurrentPosition() {
   });
 }
 
+let usingAdminToken = false; // /admin·/inventory에서 이미 SKT 계정으로 로그인해뒀을 때, 그 토큰을 이어받아 쓰는 중이면 true
+
 function getRepToken() {
+  if (usingAdminToken) return getAdminToken();
   return localStorage.getItem("rs_rep_token") || "";
 }
 
 function setRepToken(token) {
   if (token) localStorage.setItem("rs_rep_token", token);
   else localStorage.removeItem("rs_rep_token");
+}
+
+function getAdminToken() {
+  return localStorage.getItem("rs_admin_token") || "";
+}
+
+// 다른 화면(/admin, /inventory)에서 SKT 계정으로 이미 로그인했다면, 그 토큰으로 여기서도
+// 바로 들어간다 (require_rep 쪽이 admin 토큰을 사원 계정에 이어붙여 받아준다). 사원 고유ID로
+// 로그인한 세션(rs_rep_token)이 없을 때만 시도한다.
+async function tryRestoreFromAdminToken() {
+  const token = getAdminToken();
+  if (!token) return false;
+  try {
+    const res = await fetch(appUrl("/api/auth/me"), {
+      headers: { "X-Rep-Token": token },
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    usingAdminToken = true;
+    rep = data;
+    saveRep(rep);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 async function api(path, options) {
@@ -237,6 +265,7 @@ async function api(path, options) {
 function forceRelogin() {
   clearRep();
   setRepToken("");
+  usingAdminToken = false;
   rep = null;
   showScreen("login");
 }
@@ -296,6 +325,20 @@ async function handleLogin() {
 }
 
 function handleLogout() {
+  if (usingAdminToken) {
+    // /admin·/inventory에서 넘겨받은 SKT 세션이다 - 그쪽 세션(admin_sessions)을 끊어야
+    // 진짜 로그아웃이 된다. /api/auth/logout(rep_sessions)은 여기엔 안 먹는다.
+    const token = getAdminToken();
+    if (token) {
+      fetch(appUrl("/api/admin/logout"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Token": token },
+      }).catch(() => {});
+    }
+    localStorage.removeItem("rs_admin_token");
+    forceRelogin();
+    return;
+  }
   const token = getRepToken();
   if (token) {
     // 서버 세션도 끊는다. 실패해도 로컬은 지운다.
@@ -989,6 +1032,9 @@ document.addEventListener("DOMContentLoaded", () => {
   if (rep) {
     enterApp();
   } else {
-    showScreen("login");
+    tryRestoreFromAdminToken().then((restored) => {
+      if (restored) enterApp();
+      else showScreen("login");
+    });
   }
 });
