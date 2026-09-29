@@ -446,6 +446,14 @@ def _keyword_matches_any_store(conn, keyword: str) -> bool:
     return row is not None
 
 
+def _lookup_store(conn, code: str) -> dict | None:
+    row = conn.execute(
+        "SELECT store_code, name, address, detail_address FROM stores WHERE store_code = ?",
+        (code,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def _top_stores_bit(points: list, n: int = 3) -> str:
     if not points:
         return ""
@@ -846,7 +854,22 @@ def _answer_from_parsed(
                 else f"「{key}」 {dealer_scope}판매점은 {n_stores}곳입니다. 목록은 아래 표와 지도를 확인하세요.{as_of_bit}"
             )
         elif data["mapped_qty"] == 0 and not all_models:
-            answer = f"「{key}」로 찾은 {dealer_scope}판매점 재고는 없습니다.{as_of_bit}"
+            # P코드로 직접 물었는데 0건이면 "그런 코드가 아예 없다"와 "코드는 있는데
+            # 지금 올라온 재고가 0이다"를 구분해 답한다 — 둘 다 그냥 "재고는 없습니다"로
+            # 뭉뚱그리면, 판매점 마스터엔 있는 진짜 코드도 마치 시스템이 그 코드 자체를
+            # 모르는 것처럼 보인다.
+            store_code = (parsed.get("store_code") or "").strip()
+            store = _lookup_store(conn, store_code) if store_code else None
+            if store:
+                addr = " ".join(x for x in [store.get("address"), store.get("detail_address")] if x)
+                answer = (
+                    f"{store_code} {store.get('name') or ''}은(는) 등록된 판매점이지만, "
+                    f"{dealer_scope}현재 업로드된 재고가 없습니다.{f' {addr}.' if addr else ''}{as_of_bit}"
+                )
+            elif store_code:
+                answer = f"{store_code} 코드를 가진 판매점을 찾지 못했습니다. 코드를 다시 확인해주세요."
+            else:
+                answer = f"「{key}」로 찾은 {dealer_scope}판매점 재고는 없습니다.{as_of_bit}"
         else:
             answer = f"「{key}」 {dealer_scope}재고는 {data['mapped_qty']}대, {len(data['points'])}곳입니다. 숫자는 아래 표입니다.{as_of_bit}"
         return _pack(intent, model, answer, data, overview, parsed)

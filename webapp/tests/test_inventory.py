@@ -2,6 +2,7 @@
 
 import os
 import sys
+import uuid
 from io import BytesIO
 
 import pytest
@@ -314,6 +315,45 @@ def test_ask_inventory_keyword_survives_when_it_matches_a_real_store(server, fix
 
     assert result["intent"] == "keyword"
     assert result["map"]["keyword"] == "테스트구"
+
+
+def test_ask_inventory_distinguishes_unknown_code_from_real_store_with_no_stock(server, fixtures):
+    """"PE5845 판매점의 재고 보여줘"에 "재고는 없습니다"만 답해서, 마치 그런 코드
+    자체를 모르는 것처럼 보인 실제 사용자 혼란.
+
+    P코드가 판매점 마스터(stores)에 실제로 있는데 지금 올라온 재고가 0대인 경우와,
+    그 코드 자체가 없는 경우를 구분해서 답해야 한다.
+    """
+    from db import db_session
+    from inventory_chat import ask_inventory
+
+    upload_sample(fixtures)  # fixtures["store_code"] 매장에만 재고를 올린다
+
+    no_stock_code = f"PZ{uuid.uuid4().int % 10000:04d}"
+    unknown_code = f"PZ{uuid.uuid4().int % 10000:04d}"
+    with db_session() as conn:
+        conn.execute(
+            "INSERT INTO stores (id, dealer_id, store_code, name, address, lat, lng, created_at)"
+            " VALUES (?,?,?,?,?,?,?,datetime('now'))",
+            (
+                uuid.uuid4().hex,
+                fixtures["dealer_id"],
+                no_stock_code,
+                "재고없는판매점",
+                "서울시 어딘가",
+                37.6,
+                127.1,
+            ),
+        )
+        conn.commit()
+
+    with db_session() as conn:
+        real_code_result = ask_inventory(conn, f"{no_stock_code} 판매점의 재고 보여줘", dealer_id=fixtures["dealer_id"])
+        unknown_code_result = ask_inventory(conn, f"{unknown_code} 판매점의 재고 보여줘", dealer_id=fixtures["dealer_id"])
+
+    assert "등록된 판매점" in real_code_result["answer"]
+    assert "재고없는판매점" in real_code_result["answer"]
+    assert "찾지 못했습니다" in unknown_code_result["answer"]
 
 
 def test_roster_lists_dealers_with_staff_even_before_upload(server, fixtures):
