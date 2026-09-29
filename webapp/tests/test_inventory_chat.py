@@ -4,7 +4,7 @@ interpret_inventory_question()/parse_inventory_question() 은 db.py/app.py 를 �
 (웹앱 최상단 import 금지 규칙과 무관하게) 이 파일은 모듈 최상단에서 바로 import 해도 된다.
 """
 
-from inventory_chat import _extract_color_rules, parse_inventory_question
+from inventory_chat import _extract_color_rules, _normalize_terms, parse_inventory_question
 from inventory_llm import _clean_keyword, interpret_inventory_question
 
 
@@ -72,6 +72,40 @@ def test_parse_inventory_question_recognizes_letter_prefixed_store_code():
     """실제 P코드는 'PE2810'처럼 P+영문자+숫자 형태가 흔한데, 숫자만 잡던 정규식이 놓치고 있었다."""
     parsed = parse_inventory_question("PE2810 재고 얼마나 있어")
     assert parsed["store_code"] == "PE2810"
+
+
+def test_normalize_terms_maps_georaecheo_to_store():
+    # 단순 문자열 치환이라 조사(가/이)는 안 맞춰준다 — 어차피 _extract_keyword가
+    # 조사를 따로 걸러내므로 파싱 결과에는 영향이 없다.
+    assert _normalize_terms("거래처가 어디 있어") == "판매점가 어디 있어"
+
+
+def test_parse_inventory_question_treats_georaecheo_as_store_synonym():
+    """"거래처"는 대리점이 거래하는 판매점을 가리키는 말 — "판매점"과 똑같이 다룬다.
+
+    "판매점"처럼 일반 단어라 keyword로 새지 않아야 하고("그 판매점" 회귀 테스트와 같은 원리),
+    지시어("이 거래처")도 "이 판매점"과 같은 REFER_HINTS를 그대로 물려받아야 한다.
+    """
+    parsed = parse_inventory_question("거래처가 어디 있어")
+    assert parsed["keyword"] == ""
+
+    parsed = parse_inventory_question("이 거래처에 무슨 재고 있어", last_store_code="PC0198")
+    assert parsed["store_code"] == "PC0198"
+
+
+def test_parse_inventory_question_keeps_district_keyword_alongside_region():
+    """"서울 중구에 있는 판매점 리스트 보여줘"는 시/도(서울)만 잡히고 구(중구)는 버려져
+    서울 전체로 뭉뚱그려 나가던 버그. region이 잡혀도 keyword(중구)를 같이 남긴다."""
+    parsed = parse_inventory_question("서울 중구에 있는 판매점 리스트 보여줘")
+    assert parsed["intent"] == "region"
+    assert parsed["region"] == "서울"
+    assert parsed["keyword"] == "중구"
+    assert parsed["list_mode"] is True
+
+
+def test_parse_inventory_question_list_mode_off_by_default():
+    parsed = parse_inventory_question("서울 재고 몇 대야")
+    assert parsed["list_mode"] is False
 
 
 def test_extract_color_rules_parses_multiple_ranges():

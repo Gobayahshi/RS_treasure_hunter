@@ -1563,6 +1563,11 @@ body.inventory-assist #chatMap.treasure-map {
   overflow-wrap: anywhere;
   word-break: break-word;
   overflow: hidden;
+  /* .chat-log 는 세로 flex 목록이라, overflow:hidden 이 있는 flex 아이템은 기본
+     자동 min-height 가 0으로 처리돼(내용 기준이 아니라) 답이 길어지면 flex가
+     이 말풍선을 실제 내용보다 작게 찌그러뜨리고 넘친 줄은 그냥 잘라버린다.
+     flex-shrink:0 으로 항상 내용 높이 그대로 그려지게 한다. */
+  flex-shrink: 0;
 }
 
 .chat-bubble.bot {

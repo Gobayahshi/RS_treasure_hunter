@@ -22,6 +22,22 @@ from inventory_llm import interpret_inventory_question, llm_available
 
 DEFAULT_MODEL = ""
 
+# SKT/대리점이 같은 뜻으로 섞어 쓰는 용어. 질문을 파싱하기 전에 표준 단어로 바꿔서,
+# 그 표준 단어가 이미 갖고 있는 처리(불용어 drop-list, "이 판매점" 같은 지시어 인식 등)를
+# 그대로 물려받는다 — 용어별로 특수 처리를 따로 만들지 않는다.
+# 새 용어가 나오면 여기에 한 줄만 추가하면 된다.
+TERM_SYNONYMS = {
+    "거래처": "판매점",  # 대리점이 거래하는 판매점(매장)을 가리키는 말.
+}
+
+
+def _normalize_terms(text: str) -> str:
+    result = text or ""
+    for word, canonical in TERM_SYNONYMS.items():
+        result = result.replace(word, canonical)
+    return result
+
+
 NEAREST_HINTS = (
     "가까운",
     "근처",
@@ -39,8 +55,21 @@ PRICE_HINTS = ("가격", "금액", "실구매가", "실구매")
 AGED_HINTS = ("오래", "묵은", "체화", "30일", "장기보유", "장기 보유", "보유기간", "출고된지")
 COMPARE_HINTS = ("비교", "어디가 더", "더 많", "차이")
 AREA_HINTS = ("이 영역", "이영역", "선택한 영역", "고른 영역", "지도에서 선택", "박스", "사각형")
-ANALYZE_HINTS = ("어때", "현황", "요약", "추천", "먼저", "문제", "분석", "어디부터")
+ANALYZE_HINTS = (
+    "어때",
+    "현황",
+    "요약",
+    "추천",
+    "먼저",
+    "문제",
+    "분석",
+    "어디부터",
+    "가장 많은",
+    "제일 많은",
+)
 COLOR_HINTS = ("색으로", "색깔", "색상", "칠해", "표시해", "보여줘", "보여 줘")
+# "판매점 리스트 보여줘"처럼 대수(재고량) 대신 매장 자체의 목록을 원하는 질문.
+LIST_HINTS = ("리스트", "목록")
 # "그 판매점에 무슨 재고 있어?" 처럼 바로 앞 답에서 나온 매장을 가리키는 말.
 # 이 말만으로는 매장을 특정할 수 없어서, 프런트가 직전 응답의 대표 매장(store_code)을
 # last_store_code 로 함께 보내주면 그 매장으로 좁힌다 (질문 자체엔 P코드/지명이 없어도 됨).
@@ -55,9 +84,11 @@ REFER_HINTS = (
     "해당 매장",
     "해당매장",
     "해당 판매점",
+    "해당판매점",
     "이 매장",
     "이매장",
     "이 판매점",
+    "이판매점",
     "방금 그",
     "방금그",
     "아까 그",
@@ -95,6 +126,15 @@ _PIN_COLORS = (
 
 def _compact(text: str) -> str:
     return re.sub(r"\s+", "", (text or "").strip().lower())
+
+
+def _any_hint(compact: str, hints: tuple[str, ...]) -> bool:
+    """*_HINTS 튜플에 있는 "장기 보유"처럼 띄어쓰기 있는 힌트를, 공백을 이미 다 지운
+    compact 문자열과 비교한다. 힌트마다 "장기보유" 없는 버전을 손으로 또 넣지 않아도
+    되게 여기서 한 번에 처리한다 — 실제로 "가장 많은"/"현재 위치" 등 여럿이 이 공백
+    불일치 때문에 한 번도 안 걸리고 있었다.
+    """
+    return any(_compact(h) in compact for h in hints)
 
 
 def _extract_model(text: str) -> str:
@@ -202,7 +242,7 @@ def _extract_store_code(text: str, last_store_code: str = "") -> str:
     if match:
         return re.sub(r"\s+", "", match.group(0)).upper()
     compact = _compact(text)
-    if last_store_code and any(h in compact for h in REFER_HINTS):
+    if last_store_code and _any_hint(compact, REFER_HINTS):
         return last_store_code.strip().upper()
     return ""
 
@@ -262,6 +302,15 @@ def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None
         "곳의",
         "곳",
         "판매점",
+        "리스트",
+        "목록",
+        "보유한",
+        "보유중",
+        "보유하고",
+        "보유",
+        "갖고있는",
+        "갖고 있는",
+        "가진",
         "기종",
         "모델",
         "질문",
@@ -383,6 +432,20 @@ def _extract_dealer(text: str, dealers: list[dict]) -> dict | None:
     return ranked[0][1]
 
 
+def _keyword_matches_any_store(conn, keyword: str) -> bool:
+    """keyword가 실제 판매점 이름/주소/코드에 있는 말인지 DB로 확인한다.
+
+    "이 지명/매장명이 진짜 있는가"를 실제 데이터로 검증하는 것이라, 새로운 일반 단어가
+    keyword로 새어나올 때마다 불용어를 하나씩 추가하는 것보다 근본적인 방어다.
+    """
+    like = f"%{keyword}%"
+    row = conn.execute(
+        "SELECT 1 FROM stores WHERE name LIKE ? OR address LIKE ? OR detail_address LIKE ? OR store_code LIKE ? LIMIT 1",
+        (like, like, like, like),
+    ).fetchone()
+    return row is not None
+
+
 def _top_stores_bit(points: list, n: int = 3) -> str:
     if not points:
         return ""
@@ -394,7 +457,7 @@ def _top_stores_bit(points: list, n: int = 3) -> str:
 def parse_inventory_question(
     text: str, dealers: list[dict] | None = None, last_store_code: str = ""
 ) -> dict:
-    raw = (text or "").strip()
+    raw = _normalize_terms((text or "").strip())
     compact = _compact(raw)
     model = _extract_model(raw)
     region = _extract_region(raw)
@@ -407,28 +470,28 @@ def parse_inventory_question(
     if store_code:
         keyword = store_code
 
-    has_price = any(h in compact for h in PRICE_HINTS) or (
+    has_price = _any_hint(compact, PRICE_HINTS) or (
         store_code and "합" in compact and "얼마" in compact
     )
-    if any(h in compact for h in HELP_HINTS) or not compact:
+    if _any_hint(compact, HELP_HINTS) or not compact:
         intent = "help"
     elif store_code and has_price:
         intent = "price"
-    elif any(h in compact for h in AREA_HINTS):
+    elif _any_hint(compact, AREA_HINTS):
         intent = "bbox"
-    elif any(h in compact for h in NEAREST_HINTS):
+    elif _any_hint(compact, NEAREST_HINTS):
         intent = "nearest"
-    elif any(h in compact for h in AGED_HINTS):
+    elif _any_hint(compact, AGED_HINTS):
         intent = "aged"
-    elif any(h in compact for h in COMPARE_HINTS):
+    elif _any_hint(compact, COMPARE_HINTS):
         intent = "compare"
-    elif any(h in compact for h in ANALYZE_HINTS):
+    elif _any_hint(compact, ANALYZE_HINTS):
         intent = "analyze"
     elif region:
         intent = "region"
-    elif dealer and (any(h in compact for h in TOTAL_HINTS) or not keyword):
+    elif dealer and (_any_hint(compact, TOTAL_HINTS) or not keyword):
         intent = "total"
-    elif any(h in compact for h in TOTAL_HINTS) or not keyword:
+    elif _any_hint(compact, TOTAL_HINTS) or not keyword:
         intent = "total"
     else:
         intent = "keyword"
@@ -438,7 +501,13 @@ def parse_inventory_question(
         "model": model or "ALL",
         "models": [model] if model else [],
         "region": region if intent in {"region", "nearest", "analyze", "aged", "compare", "bbox"} else "",
-        "keyword": keyword if intent in {"keyword", "nearest", "analyze", "aged", "compare", "bbox", "price"} else "",
+        # "서울 중구에 있는 판매점 알려줘"처럼 지역명(서울)과 더 좁은 지명(중구)이 같이 오면,
+        # 지역이 잡혔다고 keyword를 버리지 않는다 — 시/도 단위보다 더 좁혀서 같이 거른다.
+        "keyword": (
+            keyword
+            if intent in {"keyword", "nearest", "analyze", "aged", "compare", "bbox", "price", "region"}
+            else ""
+        ),
         "store_code": store_code,
         "dealer_id": dealer["id"] if dealer else "",
         "dealer_name": dealer.get("name") or "" if dealer else "",
@@ -447,6 +516,7 @@ def parse_inventory_question(
         "use_map_area": intent == "bbox",
         "aged_only": intent == "aged",
         "pin_color": _extract_pin_color(raw),
+        "list_mode": _any_hint(compact, LIST_HINTS),
         "nlu": "rules",
     }
 
@@ -460,6 +530,9 @@ def ask_inventory(
     dealer_id: str | None = None,
     last_store_code: str | None = None,
 ) -> dict:
+    # "거래처" 같은 SKT/대리점 용어를 표준 단어로 맞춰서, 규칙 기반이든 LLM이든
+    # 이 함수가 부르는 모든 추출기가 같은 말을 보게 한다.
+    text = _normalize_terms(text)
     all_dealers = [dict(r) for r in conn.execute("SELECT id, dealer_code, name FROM dealers").fetchall()]
     dealers = [d for d in all_dealers if d["id"] == dealer_id] if dealer_id else all_dealers
     nlu = "rules"
@@ -503,8 +576,8 @@ def ask_inventory(
         if color:
             parsed["pin_color"] = color
             compact = _compact(text)
-            if any(h in compact for h in AGED_HINTS) or any(h in compact for h in COLOR_HINTS):
-                if any(h in compact for h in AGED_HINTS):
+            if _any_hint(compact, AGED_HINTS) or _any_hint(compact, COLOR_HINTS):
+                if _any_hint(compact, AGED_HINTS):
                     parsed["aged_only"] = True
     parsed["nlu"] = nlu
     if dealer_id:
@@ -513,6 +586,17 @@ def ask_inventory(
         parsed["dealer_name"] = (scoped or {}).get("name") or parsed.get("dealer_name") or ""
         if parsed.get("intent") == "compare":
             parsed["intent"] = "analyze"
+    if parsed.get("intent") == "keyword" and not parsed.get("store_code"):
+        # keyword는 "판매점명/주소에 이 말이 들어간 곳"을 찾는 필터라, 새 단어가 나올 때마다
+        # 불용어 목록에 하나씩 추가하는 건 끝이 없다("어디"/"보유한" 등 실제로 반복됐다).
+        # 대신 실제 판매점 데이터에 그 말이 있는지 먼저 확인해서, 없으면(=지명/매장명이
+        # 아니라 그냥 새어나온 일반 단어일 가능성이 높으면) keyword를 버리고 전체로 돌아간다.
+        # store_code(P코드 직접 입력, "그 판매점" 지시어)로 정해진 경우는 그대로 둔다 —
+        # 그건 사용자가 특정 매장을 콕 집은 것이라 "결과 없음"이 맞는 답일 수 있다.
+        kw = (parsed.get("keyword") or "").strip()
+        if kw and not _keyword_matches_any_store(conn, kw):
+            parsed["keyword"] = ""
+            parsed["intent"] = "total"
     result = _answer_from_parsed(conn, parsed, lat, lng, bbox=bbox)
     result["nlu"] = nlu
     return result
@@ -735,9 +819,18 @@ def _answer_from_parsed(
             )
         return _pack(intent, model, answer, data, overview, parsed)
 
+    list_mode = bool(parsed.get("list_mode"))
+
     if intent == "region":
         region_name = parsed["region"]
-        if data["mapped_qty"] == 0:
+        if list_mode:
+            n_stores = len(data.get("points") or [])
+            answer = (
+                f"{region_name}에 {dealer_scope}판매점이 없습니다.{as_of_bit}"
+                if n_stores == 0
+                else f"{region_name} {dealer_scope}판매점은 {n_stores}곳입니다. 목록은 아래 표와 지도를 확인하세요.{as_of_bit}"
+            )
+        elif data["mapped_qty"] == 0:
             answer = f"{region_name}에서 {dealer_scope}판매점 재고는 없습니다.{as_of_bit}"
         else:
             answer = f"{region_name} {dealer_scope}재고는 {data['mapped_qty']}대, {len(data['points'])}곳입니다. 숫자는 아래 표입니다.{as_of_bit}"
@@ -745,7 +838,14 @@ def _answer_from_parsed(
 
     if intent == "keyword":
         key = parsed["keyword"]
-        if data["mapped_qty"] == 0 and not all_models:
+        if list_mode:
+            n_stores = len(data.get("points") or [])
+            answer = (
+                f"「{key}」로 찾은 {dealer_scope}판매점이 없습니다.{as_of_bit}"
+                if n_stores == 0
+                else f"「{key}」 {dealer_scope}판매점은 {n_stores}곳입니다. 목록은 아래 표와 지도를 확인하세요.{as_of_bit}"
+            )
+        elif data["mapped_qty"] == 0 and not all_models:
             answer = f"「{key}」로 찾은 {dealer_scope}판매점 재고는 없습니다.{as_of_bit}"
         else:
             answer = f"「{key}」 {dealer_scope}재고는 {data['mapped_qty']}대, {len(data['points'])}곳입니다. 숫자는 아래 표입니다.{as_of_bit}"
@@ -763,6 +863,16 @@ def _answer_from_parsed(
             answer = f"{scope}에서 {dealer_scope}판매점 재고가 없습니다.{as_of_bit}"
         else:
             answer = f"{scope} {dealer_scope}재고는 {data['mapped_qty']}대, {len(data['points'])}곳입니다. 숫자는 아래 표입니다.{as_of_bit}"
+        if intent == "analyze":
+            # "가장 많은 재고를 보유한 판매점" 처럼 1위를 콕 집어 물었을 수 있으니,
+            # 전체 요약과 별개로 1위 매장 이름을 답 문장 자체에 바로 넣어준다.
+            top_stores = [s for s in (overview.get("top_stores") or []) if _n(s.get("qty"))]
+            if top_stores:
+                top = top_stores[0]
+                answer += (
+                    f" 재고가 가장 많은 판매점은 {top.get('store_code') or ''} {top.get('name') or ''}"
+                    f"({_n(top.get('qty'))}대)입니다."
+                )
         return _pack(intent, model, answer, data, overview, parsed)
 
     if data["mapped_qty"] == 0:
@@ -796,6 +906,23 @@ def _build_tables(intent: str, parsed: dict, data: dict, overview: dict) -> list
     if not data:
         return []
     tables: list[dict] = []
+    # "판매점 리스트/목록 보여줘"는 대수 집계가 아니라 매장 자체를 원한 질문이다 —
+    # 기종별/랭킹 표 대신 주소가 포함된 전체 매장 목록 하나만 보여준다.
+    if parsed.get("list_mode") and intent in {"keyword", "region", "bbox"}:
+        points = list(data.get("points") or [])
+        ranked = sorted(points, key=lambda p: (p.get("name") or p.get("store_code") or ""))
+        rows = [
+            [
+                p.get("store_code") or "",
+                p.get("name") or "",
+                " ".join(x for x in [p.get("address"), p.get("detail_address")] if x),
+                _n(p.get("qty")),
+            ]
+            for p in ranked[:200]
+        ]
+        if rows:
+            tables.append(_qty_table("판매점 목록", ["P코드", "판매점", "주소", "대수"], rows))
+        return tables
     models = [m for m in (data.get("area_model_totals") or data.get("model_totals") or []) if _n(m.get("qty"))]
     dealers = [d for d in (data.get("dealer_totals") or []) if _n(d.get("qty"))]
     points = list(data.get("points") or [])
@@ -861,6 +988,14 @@ def _build_tables(intent: str, parsed: dict, data: dict, overview: dict) -> list
                 ],
             )
         )
+    if intent in {"analyze", "total"}:
+        top_stores = [s for s in (overview.get("top_stores") or []) if _n(s.get("qty"))]
+        if top_stores:
+            rows = [
+                [s.get("store_code") or "", s.get("name") or "", _n(s.get("qty")), _n(s.get("aged_qty"))]
+                for s in top_stores[:8]
+            ]
+            tables.append(_qty_table("재고 많은 매장", ["P코드", "판매점", "대수", "30일+"], rows))
     if intent == "aged":
         aged_stores = overview.get("top_aged_stores") or []
         if not aged_stores:

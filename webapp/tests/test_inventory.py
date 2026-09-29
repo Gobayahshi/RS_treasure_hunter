@@ -260,6 +260,62 @@ def test_model_breakdown_filters_to_requested_model(server, fixtures):
         assert area_models == ["SM-S931"]
 
 
+def test_ask_inventory_list_mode_returns_store_list_not_qty_table(server, fixtures):
+    """"서울 <구>에 있는 판매점 리스트 보여줘"는 재고 대수가 아니라 매장 목록을 원한 질문이다.
+
+    예전엔 시/도(서울)만 인식되고 더 좁은 구 이름은 버려져 서울 전체 재고 집계로 나갔다.
+    """
+    from db import db_session
+    from inventory_chat import ask_inventory
+
+    upload_sample(fixtures)  # SM-F971 2대를 fixtures["store_code"](주소: 서울시 테스트구 ...)에 올림
+
+    with db_session() as conn:
+        result = ask_inventory(conn, "서울 테스트구에 있는 판매점 리스트 보여줘", dealer_id=fixtures["dealer_id"])
+
+    assert result["map"]["region"] == "서울"
+    assert result["map"]["keyword"] == "테스트구"
+    assert len(result["map"]["points"]) == 1
+    titles = [t["title"] for t in result["tables"]]
+    assert titles == ["판매점 목록"]
+    row = result["tables"][0]["rows"][0]
+    assert row[0] == fixtures["store_code"]
+
+
+def test_ask_inventory_drops_unknown_word_leaked_as_keyword(server, fixtures):
+    """"가장 많은 재고를 보유한 판매점 알려줘"에서 "보유한"이 keyword로 새서
+    "「보유한」로 찾은 판매점 재고는 없습니다"가 나온 실제 버그.
+
+    drop-list에 "보유한"을 추가한 것과 별개로, DB에 없는 말이면 keyword 자체를
+    버리는 일반 방어(_keyword_matches_any_store)가 걸려 있는지 확인한다.
+    """
+    from db import db_session
+    from inventory_chat import ask_inventory
+
+    upload_sample(fixtures)
+
+    with db_session() as conn:
+        result = ask_inventory(conn, "가장 많은 재고를 보유한 판매점 알려줘", dealer_id=fixtures["dealer_id"])
+
+    assert result["intent"] != "keyword"
+    assert "찾은" not in result["answer"]
+    assert fixtures["store_code"] in result["answer"]
+
+
+def test_ask_inventory_keyword_survives_when_it_matches_a_real_store(server, fixtures):
+    """DB 검증 방어가 진짜 지명/매장명까지 지워버리면 안 된다."""
+    from db import db_session
+    from inventory_chat import ask_inventory
+
+    upload_sample(fixtures)
+
+    with db_session() as conn:
+        result = ask_inventory(conn, "테스트구에 뭐가 있어", dealer_id=fixtures["dealer_id"])
+
+    assert result["intent"] == "keyword"
+    assert result["map"]["keyword"] == "테스트구"
+
+
 def test_roster_lists_dealers_with_staff_even_before_upload(server, fixtures):
     """임시 계정을 없앤 뒤에도, 직원이 있는 대리점은 '미업로드'로 목록에 나와야 한다."""
     from db import db_session
