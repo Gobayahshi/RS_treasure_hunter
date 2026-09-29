@@ -302,6 +302,7 @@ def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None
         "곳의",
         "곳",
         "판매점",
+        "매장",
         "리스트",
         "목록",
         "보유한",
@@ -321,19 +322,8 @@ def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None
         "해줘",
         "해 줘",
         "좀",
-        "을",
-        "를",
-        "에",
-        "의",
-        "은",
-        "는",
-        "이",
-        "가",
-        "으로",
-        "로",
-        "에서",
-        "하고",
-        "랑",
+        "대리점",
+        "우리",
         # 색상 요청("10일 이하는 초록색으로")에서 색 이름·구간 연결어가 지명으로 오인되지 않게.
         "이하",
         "이상",
@@ -356,12 +346,37 @@ def _extract_keyword(text: str, region: str, extra_drop: list[str] | None = None
         if word:
             cleaned = cleaned.replace(word, " ")
     cleaned = re.sub(r"[^0-9A-Za-z가-힣\s]", " ", cleaned)
-    # "10일"처럼 순수 숫자(+일)만 남은 토큰은 지명·매장명일 수 없다 (색상 구간 경계 등).
-    tokens = [t for t in cleaned.split() if len(t) >= 2 and not re.fullmatch(r"\d+일?", t)]
+    tokens = [_strip_trailing_particle(t) for t in cleaned.split()]
+    # "대리점"처럼 통째로 지운 단어 바로 뒤에 조사만 남으면("대리점이랑" -> "이랑")
+    # 그 조사 자체가 토큰으로 남는다 — 의미 없는 조사 하나만 남은 토큰은 버린다.
+    # "10일"처럼 순수 숫자(+일)만 남은 토큰도 지명·매장명일 수 없다(색상 구간 경계 등).
+    tokens = [
+        t
+        for t in tokens
+        if len(t) >= 2 and t not in _PARTICLES and not re.fullmatch(r"\d+일?", t)
+    ]
     if not tokens:
         return ""
     tokens.sort(key=len, reverse=True)
     return tokens[0]
+
+
+# 조사는 단어 어디에 있든 지우면 안 된다 — "이월상품"에서 "이"를, "에어컨"에서 "에"를
+# 통째로 지우면 엉뚱한 말이 남는다. 조사는 항상 단어 "끝"에 붙으므로 끝에서만 뗀다.
+# 긴 조사부터 봐야 "으로"를 "로"로 먼저 잘못 떼지 않는다.
+_PARTICLES = ("으로", "에서", "하고", "까지", "부터", "이랑", "랑", "을", "를", "에", "의", "은", "는", "이", "가", "로")
+
+
+def _strip_trailing_particle(token: str) -> str:
+    for p in _PARTICLES:
+        if token.endswith(p):
+            # 떼고 나서 너무 짧아지면(1자 이하) 애초에 이게 조사가 아니었을 수 있다 —
+            # 그럴 땐 더 짧은 조사로 다시 시도하지 않고 원래 토큰을 그대로 둔다.
+            # (짧은 조각일수록 DB에 우연히 걸릴 위험이 커서, 못 뗀 원래 토큰이 더 안전하다)
+            if len(token) - len(p) >= 2:
+                return token[: -len(p)]
+            return token
+    return token
 
 
 def _format_km(meters: int | None) -> str:

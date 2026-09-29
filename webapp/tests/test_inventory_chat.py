@@ -156,3 +156,23 @@ def test_ask_inventory_avoids_aged_filter_from_color_boundary(server):
             {"min": 0, "max": 10, "color": "#16a34a"},
             {"min": 30, "max": None, "color": "#dc2626"},
         ]
+
+
+def test_parse_inventory_question_drops_more_leaked_stopwords():
+    """"거래처/보유한" 이후 실사용 중 더 찾은 새는 단어들. "매장"/"대리점" 자체가
+    일반 단어 drop-list에 없었던 게 빠진 부분이었다."""
+    assert parse_inventory_question("우리 매장 재고 알려줘")["keyword"] == ""
+    assert parse_inventory_question("이 대리점 재고 몇 대야")["keyword"] == ""
+    assert parse_inventory_question("전체 몇 곳이야")["keyword"] == ""
+
+
+def test_extract_keyword_particle_stripping_does_not_mangle_whole_words():
+    """조사 제거를 문자열 아무데서나 지우면 "이월상품"의 "이"를 지워 "월상품"이
+    되는 것처럼 단어 자체가 망가진다. 조사는 토큰 "끝"에서만 떼야 한다."""
+    parsed = parse_inventory_question("이월상품 있어?")
+    assert parsed["keyword"] == "이월상품"
+
+
+def test_extract_keyword_strips_trailing_particle_correctly():
+    parsed = parse_inventory_question("김포에 뭐가 있어")
+    assert parsed["keyword"] == "김포"
