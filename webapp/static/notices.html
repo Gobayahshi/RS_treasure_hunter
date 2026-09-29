@@ -24,13 +24,20 @@
 
 <main>
   <section id="screen-notice-login" class="screen">
-    <div class="card center-card">
-      <h1>공지사항</h1>
-      <p class="muted">보물찾기·재고Map과 같은 계정으로 로그인하세요.</p>
+    <div class="card center-card rs-unified-login">
+      <img src="img/rs-team-logo.png" alt="수도권 RS팀" class="rs-login-logo" />
+      <h1>■ Route Sale 활동 지원 ■</h1>
+      <p class="muted small rs-login-sub">하나의 아이디로<br />보물찾기 · AI재고Map · 공지사항을 모두 이용합니다</p>
       <input id="noticeUsername" type="text" placeholder="사원 고유ID (SKT는 관리자 아이디)" autocomplete="username" />
       <input id="noticePassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
       <button type="button" id="noticeLoginBtn" class="btn-primary">시작하기</button>
       <p id="noticeLoginError" class="error hidden"></p>
+      <div class="rs-login-apps">
+        <div class="rs-login-app"><span class="rs-login-app-icon">🏆</span><span>보물찾기</span></div>
+        <div class="rs-login-app"><span class="rs-login-app-icon">📦</span><span>AI재고Map</span></div>
+        <div class="rs-login-app"><span class="rs-login-app-icon">📣</span><span>공지사항</span></div>
+      </div>
+      <p class="rs-login-footer">since 2021 · 수도권 RS팀</p>
     </div>
   </section>
 

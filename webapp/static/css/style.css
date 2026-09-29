@@ -154,6 +154,64 @@ main {
   border-top: 1px solid #eee;
 }
 
+/* 세 화면(보물찾기/재고Map/공지사항)이 공유하는 로그인 카드 꾸밈. 2026-09-29 통합 로그인 요청. */
+.rs-unified-login .rs-login-logo {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin: 0 auto 14px;
+  display: block;
+}
+
+.rs-unified-login h1 {
+  font-size: 18px;
+}
+
+.rs-unified-login .rs-login-sub {
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+.rs-login-apps {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #f1f5f9;
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+}
+
+.rs-login-app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.rs-login-app-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: #eff6ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.rs-login-app span:last-child {
+  font-size: 10px;
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+.rs-login-footer {
+  margin: 14px 0 0;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
 /* 보물찾기 로그인 화면 전용: 비밀번호 재설정 */
 .link-btn {
   width: 100%;

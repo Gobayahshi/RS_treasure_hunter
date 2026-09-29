@@ -29,14 +29,16 @@
 
   <!-- 로그인 화면 -->
   <section id="screen-login" class="screen">
-    <div class="card center-card">
-      <h1>🏆 RS-Treasure Hunter</h1>
-      <p class="muted small">초기 비밀번호는 고유ID와 같습니다</p>
+    <div class="card center-card rs-unified-login">
+      <img src="img/rs-team-logo.png" alt="수도권 RS팀" class="rs-login-logo" />
+      <h1>■ Route Sale 활동 지원 ■</h1>
+      <p class="muted small rs-login-sub">하나의 아이디로<br />보물찾기 · AI재고Map · 공지사항을 모두 이용합니다</p>
       <input id="loginCode" type="text" placeholder="고유ID (사원코드)" autocomplete="username" />
       <input id="loginPassword" type="password" placeholder="비밀번호" autocomplete="current-password" />
       <button id="loginBtn" class="btn-primary">시작하기</button>
       <p id="loginError" class="error hidden"></p>
       <button id="forgotBtn" class="link-btn">비밀번호를 잊으셨나요?</button>
+      <p class="muted small">초기 비밀번호는 고유ID와 같습니다</p>
 
       <div id="resetBox" class="reset-box hidden">
         <p class="login-howto-title">비밀번호 재설정</p>
@@ -58,6 +60,12 @@
           <li>성공하면 포인트가 쌓이고, 같은 주소는 하루에 한 번입니다.</li>
         </ol>
       </div>
+      <div class="rs-login-apps">
+        <div class="rs-login-app"><span class="rs-login-app-icon">🏆</span><span>보물찾기</span></div>
+        <div class="rs-login-app"><span class="rs-login-app-icon">📦</span><span>AI재고Map</span></div>
+        <div class="rs-login-app"><span class="rs-login-app-icon">📣</span><span>공지사항</span></div>
+      </div>
+      <p class="rs-login-footer">since 2021 · 수도권 RS팀</p>
     </div>
   </section>
 
