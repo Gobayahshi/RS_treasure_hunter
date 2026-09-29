@@ -521,12 +521,16 @@ def _rep_from_token(conn, token: str):
         rep_id = new_id()
         conn.execute(
             """
-            INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, created_at, must_change_password)
-            VALUES (?, NULL, ?, ?, NULL, ?, 0)
+            INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, created_at, must_change_password, linked_admin_id)
+            VALUES (?, NULL, ?, ?, NULL, ?, 0, ?)
             """,
-            (rep_id, admin["name"], normalize_employee_code(admin["username"]), now_iso()),
+            (rep_id, admin["name"], normalize_employee_code(admin["username"]), now_iso(), admin["id"]),
         )
         linked = find_rep(conn, admin["username"])
+    elif not linked["linked_admin_id"]:
+        # 표시가 안 돼 있으면(예: 이 컬럼이 생기기 전에 만들어진 레코드) 지금 붙여둔다 -
+        # 그래야 부팅마다 도는 "비밀번호 없으면 채우기" 마이그레이션이 다시 안 건드린다.
+        conn.execute("UPDATE reps SET linked_admin_id = ? WHERE id = ?", (admin["id"], linked["id"]))
     return dict(_rep_with_dealer(conn, linked["id"]))
 
 
@@ -904,7 +908,7 @@ def unified_login():
             (employee_code,),
         ).fetchone()
 
-        if rep and rep["password_hash"] is not None:
+        if rep and not rep["linked_admin_id"] and rep["password_hash"] is not None:
             if not check_password_hash(rep["password_hash"], password):
                 return invalid
             using_initial = check_password_hash(rep["password_hash"], rep["employee_code"]) and not is_test_account(
@@ -973,10 +977,11 @@ def login():
             (employee_code,),
         ).fetchone()
 
-        if not rep or rep["password_hash"] is None:
-            # 사원이 아니거나(아직 없거나), 사원은 있지만 SKT 계정과 연결된 레코드(비밀번호 NULL)다.
-            # 두 경우 다 비밀번호는 admins 것만 본다 - 복사해두면 SKT 쪽 비밀번호를 바꿔도
-            # 여기 반영이 안 된다. SKT 계정도 같은 로그인 칸으로 보물찾기를 쓸 수 있게
+        if not rep or rep["linked_admin_id"] or rep["password_hash"] is None:
+            # 사원이 아니거나(아직 없거나), 사원은 있지만 SKT 계정과 연결된 레코드(linked_admin_id
+            # 있음, 또는 아직 표시 전이라 비밀번호만 NULL)다. 두 경우 다 비밀번호는 admins
+            # 것만 본다 - 복사해두면 SKT 쪽 비밀번호를 바꿔도 여기 반영이 안 된다.
+            # SKT 계정도 같은 로그인 칸으로 보물찾기를 쓸 수 있게
             # 하기 위해서다(요청: 2026-09-28).
             raw_username = (body.get("employee_code") or "").strip()
             admin = conn.execute("SELECT * FROM admins WHERE username = ?", (raw_username,)).fetchone()

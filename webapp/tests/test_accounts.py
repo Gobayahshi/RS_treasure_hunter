@@ -178,6 +178,46 @@ def test_skt_login_reuses_same_linked_rep_and_tracks_password_changes(client, ad
     assert fresh.status_code == 200
 
 
+def test_skt_bridge_rep_survives_a_restart(client, admin_token, server):
+    """2026-09-29에 실제로 터진 버그: 배포/재시작마다 도는 migrate_schema() 의
+    "비밀번호 없으면 채우기" 마이그레이션이 SKT 연결용 사원 레코드까지 진짜 계정으로
+    바꿔버려서, 재시작 뒤에는 그 사람이 'dealer'로 잘못 로그인되거나 로그인 자체가
+    막혔다. linked_admin_id 표시가 이걸 막아주는지 재시작(migrate_schema 재실행)을
+    흉내내서 확인한다.
+    """
+    import db as db_module
+
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234"},
+        headers=admin_auth(admin_token),
+    )
+    first = client.post("/api/login", json={"username": username, "password": "temp1234"})
+    assert first.status_code == 200
+    assert first.get_json()["role"] == "staff"
+
+    # 배포/재시작을 흉내낸다.
+    conn = db_module.get_conn()
+    db_module.migrate_schema(conn)
+    conn.commit()
+    conn.close()
+
+    again = client.post("/api/login", json={"username": username, "password": "temp1234"})
+    assert again.status_code == 200
+    assert again.get_json()["role"] == "staff"  # "dealer"로 뒤바뀌면 안 된다
+
+    from db import db_session
+
+    with db_session() as conn:
+        row = conn.execute(
+            "SELECT password_hash, linked_admin_id FROM reps WHERE UPPER(employee_code) = ?",
+            (username.upper(),),
+        ).fetchone()
+        assert row["linked_admin_id"] is not None
+        assert row["password_hash"] is None
+
+
 def test_unknown_code_is_still_unregistered(client):
     res = client.post(
         "/api/auth/login", json={"employee_code": f"NOBODY{uuid.uuid4().hex[:6]}", "password": "x"}

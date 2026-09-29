@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS reps (
     dealer_role TEXT NOT NULL DEFAULT 'staff',
     phone_last4 TEXT,
     password_reset_at TEXT,
-    must_change_password INTEGER NOT NULL DEFAULT 0
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    linked_admin_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS treasures (
@@ -316,9 +317,30 @@ def migrate_schema(conn) -> None:
             if stored and check_password_hash(stored, row["employee_code"]):
                 conn.execute("UPDATE reps SET must_change_password = 1 WHERE id = ?", (row["id"],))
 
-    # 기존 사원 중 비밀번호가 없으면 초기 비밀번호 = 고유ID
+    # SKT 계정도 보물찾기를 쓸 수 있게 연결해둔 사원 레코드(2026-09-28) 표시 컬럼.
+    # 없으면 만들고, 이미 만들어져 있던 연결 레코드를 되찾아 표시해둔다 - 고유ID가
+    # admins.username과 겹치는 사원은 계정 생성 시 이미 그 충돌을 막아왔으므로,
+    # 겹친다면 전부 이 연결용 레코드다.
+    if rep_cols and "linked_admin_id" not in rep_cols:
+        conn.execute("ALTER TABLE reps ADD COLUMN linked_admin_id TEXT")
+        conn.execute(
+            """
+            UPDATE reps SET linked_admin_id = (
+                SELECT a.id FROM admins a WHERE UPPER(a.username) = UPPER(reps.employee_code)
+            )
+            WHERE EXISTS (SELECT 1 FROM admins a WHERE UPPER(a.username) = UPPER(reps.employee_code))
+            """
+        )
+        # 바로 아래 "비밀번호 없으면 채우기" 마이그레이션이 이 연결 레코드를 매 부팅마다
+        # 진짜 독립 계정처럼 만들어버렸었다(2026-09-29 발견) - 다시 비워서 admins 쪽
+        # 비밀번호만 보게 되돌린다.
+        conn.execute("UPDATE reps SET password_hash = NULL WHERE linked_admin_id IS NOT NULL")
+
+    # 기존 사원 중 비밀번호가 없으면 초기 비밀번호 = 고유ID.
+    # SKT 연결 레코드(linked_admin_id 있음)는 비밀번호를 여기서 채우면 안 된다 - admins
+    # 쪽 비밀번호만 계속 봐야 SKT 비밀번호 변경이 바로 반영된다.
     for row in conn.execute(
-        "SELECT id, employee_code FROM reps WHERE password_hash IS NULL OR password_hash = ''"
+        "SELECT id, employee_code FROM reps WHERE (password_hash IS NULL OR password_hash = '') AND linked_admin_id IS NULL"
     ).fetchall():
         conn.execute(
             "UPDATE reps SET password_hash = ? WHERE id = ?",
