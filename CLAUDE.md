@@ -78,6 +78,14 @@ webapp/
   - **로그아웃도 어느 쪽 토큰을 쓰고 있었는지에 따라 갈린다.** `usingAdminToken`이면 `/api/admin/logout`(`X-Admin-Token`)으로 실제 `admin_sessions` 행을 지우고 `rs_admin_token`을 지운다 — 기존처럼 무조건 `/api/auth/logout`(`rep_sessions`만 지움)을 부르면 SKT 브리지 세션은 서버에 그대로 남는다.
   - **로그인 "제출" API 자체는 안 합쳤다** — `/`는 여전히 `/api/auth/login`, `/inventory`·`/notices`는 여전히 `/api/inventory/login`을 부른다. 이번엔 "이미 로그인돼 있으면 또 안 물어본다"만 완성했고, 세 화면이 진짜 하나의 로그인 엔드포인트를 쓰게 합치는 건 더 큰 작업이라 남겨뒀다.
   - 이것도 `app.js`를 고치는 작업이라(프로젝트 2가 MapLibre 작업으로 자주 건드리는 파일) 워크트리(`worktree-unify-login-flow`)에서 분리해서 진행했다.
+- **로그인 "제출" API도 하나로 합쳤다** (2026-09-29, 바로 다음 요청). `POST /api/login` 하나가 세 화면(`app.js`/`inventory-chat.js`/`notices.js`) 전부의 로그인 폼 제출을 받는다.
+  - 대리점 사원 고유ID를 먼저 찾고(비밀번호가 있는 진짜 사원), 없으면(또는 그 고유ID가 SKT 연결용 레코드면) `admins`에서 찾는다 — `/api/auth/login`과 같은 순서다.
+  - **`/api/inventory/login`과 달리, 소속 대리점이 없는 사원도 로그인 자체는 된다.** 재고 화면 제약(`NO_DEALER`)은 로그인 시점이 아니라 그 뒤 `require_inventory_user`가 걸린 API(`/api/inventory/me` 등)에서 그대로 걸린다 — 의도적으로 이렇게 바꿨다: 로그인 자체를 막을 이유가 없고(보물찾기는 문제없이 써야 하니까), 화면별 제약은 그 화면 API가 판단하는 게 일관적이다.
+  - 응답은 `public_rep()`(보물찾기가 읽는 필드: `id`/`employee_code`/`name`/`dealer_name`/`must_change_password`/`using_initial_password`)과 `_user_payload()`(재고Map·공지사항이 읽는 필드: `role`/`can_upload`/`can_see_all`/`can_edit`/`username`)를 합친 값이다 — 세 화면 다 자기 코드 안 고치고 필요한 필드를 그대로 읽는다. `role`이 `"dealer"`면 사원 세션(`_create_rep_session`), 아니면(`"super"`/`"staff"`) SKT 세션(`_create_session`, 연결된 사원 레코드는 `_rep_from_token`이 없으면 만든다)을 발급한다.
+  - 실패 응답은 `/api/inventory/login`처럼 항상 같은 문구(`INVALID_LOGIN`, 401)로 통일했다 — `/api/auth/login`의 "등록되지 않은 고유ID"(404)처럼 존재 여부를 알려주는 방식은 안 썼다(어느 아이디가 있는지 없는지 굳이 구분해 알려줄 이유가 없다).
+  - `app.js`는 응답의 `role`을 보고 `"dealer"`면 `rs_rep_token`, 아니면 `rs_admin_token`에 저장한다 — `inventory-chat.js`/`notices.js`가 이미 하던 방식과 맞췄다.
+  - `/api/auth/login`·`/api/inventory/login`은 코드를 안 건드렸다(동작·응답 모양 그대로) — 그 두 URL을 직접 쓰는 계정 트랙 밖 테스트가 많아서, 지우거나 내부 로직을 바꾸는 대신 완전히 새 엔드포인트를 추가하는 쪽을 택했다. 전체 pytest(159개, 다른 프로젝트 테스트 포함) 그대로 통과 확인.
+  - 이것도 `app.py`(가장 자주 겹치는 파일)를 고치는 작업이라 워크트리(`worktree-unify-login-api`)에서 분리해서 진행했다.
 - 서버 데코레이터: `require_admin`(총괄) · `require_skt`(총괄+직원, 조회) · `require_rep`(영업사원 본인) · `require_inventory_user` · `require_inventory_uploader`
 - 세션: SKT는 `admin_sessions` + 헤더 `X-Admin-Token`. 사원은 `rep_sessions` + `X-Rep-Token` (재고 화면은 `X-Admin-Token` 헤더로 보내도 사원 토큰을 인정한다).
 - **요청 본문의 `rep_id` 같은 신원 값은 믿지 않는다.** 항상 토큰의 주인을 쓴다.
@@ -92,7 +100,7 @@ webapp/
 
 - **다른 대화창이 하지 않을 것:** 새 역할 추가, 새 로그인 화면·경로 추가, 새 세션 테이블 추가, 데코레이터 규칙 변경, 로그인 ID 체계 변경. 필요하면 계정 트랙에 요청하고, 자기 프로젝트 섹션의 "다음 할 일"에 적어 둔다.
 - **다른 대화창이 해도 되는 것:** 이미 있는 데코레이터(`require_admin` 등)를 새 API에 **붙이는 것**. 어떤 역할이 그 기능을 쓸지 애매하면 사용자에게 묻는다.
-- **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/reps*`, `/api/dealers*`, `/api/*/login|logout|me|change-password|reset-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions`/`dealers` 스키마, `/admin`의 계정·영업사원 화면(추가/편집/삭제 포함), 재고 로그인 화면, 세 화면의 로그인 토큰 저장 방식(`rs_rep_token`/`rs_admin_token` 공유).
+- **계정 트랙 담당 범위:** `webapp/app.py`의 인증 블록(`SKT_ROLES`, `DEALER_ROLES`, `_admin_from_token`, `_rep_from_token`, `_inventory_user_from_token`, `require_*`, `/api/admin/accounts*`, `/api/reps*`, `/api/dealers*`, `/api/login`, `/api/*/login|logout|me|change-password|reset-password`), `webapp/db.py`의 `admins`/`admin_sessions`/`reps`/`rep_sessions`/`dealers` 스키마, `/admin`의 계정·영업사원 화면(추가/편집/삭제 포함), 재고 로그인 화면, 세 화면의 로그인 토큰 저장 방식(`rs_rep_token`/`rs_admin_token` 공유).
 - **변경 시 필수:** `webapp/tests/test_accounts.py`, `test_api.py`, `test_password.py`, `test_rep_crud.py`, `test_dealer_crud.py`, `test_skt_account_upload.py` 통과. 로그인 방식이 바뀌면 앱 인증 버전(`AUTH_VERSION`)을 올려 전원 재로그인시킬지 판단한다.
 - **대리점 삭제 (2026-09-24 추가):** `DELETE /api/dealers/<id>`(총괄만) — 소속 영업사원과 그 방문·포인트·리워드 기록까지 함께 지운다(`delete_rep()` 재사용). 그 대리점 재고 업로드(`inventory_uploads`/`inventory_items`)도 지운다. 판매점(`stores`) 마스터는 지우지 않고 `dealer_id`만 NULL로 돌린다 — 대리점이 없어져도 P코드 자체는 남아야 해서다. `/admin`에는 이 기능을 누를 버튼이 없다(대리점 목록 섹션을 없앴기 때문) — 필요하면 API를 직접 호출한다. 되돌릴 수 없다.
   - 리포지토리에 있는 `webapp/seed/rs_treasure.db`(배포용 시드)에 예시 대리점 `DEAL001`(강남대리점)/`DEAL002`(분당대리점)와 그 사원(EMP001/EMP002)이 실제로 박혀 있었다 — `excel_import.py`의 엑셀 템플릿 예시 값이 실수로 시드 DB에도 반영된 것으로 보인다. 2026-09-24에 로컬 개발 DB(`webapp/rs_treasure.db`)와 **운영(Render) DB**에서는 이 API로 지웠다. **시드 파일 자체는 아직 안 지워졌다**(바이너리 DB 파일을 스크립트로 직접 고치는 게 안전 분류기에 막혔다) — 다음에 이 파일을 다시 만들 때(재고/판매점 갱신 등) 같이 정리하거나, 사용자가 직접 확인 후 지워야 한다. 새로 fresh install(디스크가 비어 있는 상태로 첫 배포)하면 이 시드를 그대로 복사하므로 두 대리점이 다시 생길 수 있다.
@@ -174,7 +182,7 @@ webapp/
 - 서버에서 최소 샘플 수와 샘플 간격 검증 (지금은 샘플 1개로도 통과 가능).
 - R1(가짜 위치)은 웹에서 판별할 수 없다. 필요하면 네이티브 앱/PWA 검토.
 - 아이디어: 체화 재고(30일+)가 있는 매장에 rare 보물을 자동 스폰 (프로젝트 2와 연결).
-- 세 화면 다 여전히 각자 다른 로그인 API를 부른다(`/api/auth/login` vs `/api/inventory/login`) — 로그인 "제출" 자체를 하나의 엔드포인트로 합치는 건 아직 안 했다. 지금은 "이미 다른 화면에 로그인돼 있으면 다시 묻지 않는다"만 됐다(아래 참고).
+- `/api/auth/login`·`/api/inventory/login`은 그대로 남아있다 — 지우면 그 두 URL을 직접 쓰는 다른 프로젝트 테스트(`test_inventory.py`/`test_master_upload.py`/`test_notices.py`/`test_retail_store.py`/`test_skt_account_upload.py`, 계정 트랙 밖 파일들)가 다 깨진다. 세 화면(`app.js`/`inventory-chat.js`/`notices.js`)의 로그인 제출은 전부 `/api/login`(새 엔드포인트, 아래)으로 옮겼고, 옛 두 URL은 이제 프런트에서 안 쓰지만 호환을 위해 남겨뒀다.
 
 ---
 
@@ -284,5 +292,6 @@ webapp/
 - 2026-09-24: `/admin` 2차 정리 — 엑셀 마스터 업로드를 "계정 · 공통" 탭으로 이동, 판매점/영업사원 목록 모두 검색 전엔 아무것도 안 보이게 통일, "대리점" 검색·수정·삭제 섹션 신설(`PATCH /api/dealers/<id>` 추가), 랭킹보드를 영업사원 상위 10 + 대리점 전체로 분리(`GET /api/points` 응답이 배열에서 `{reps, dealers}`로 바뀜), SKT 계정 생성에 총괄/직원 구분(`role`) 추가.
 - 2026-09-28: SKT 계정도 `/`(보물찾기)에 자기 아이디로 로그인 가능하게 변경, 세션을 관리자 세션으로 발급해 `/inventory`에서 다시 로그인하라고 뜨던 버그 수정.
 - 2026-09-29: 세 화면(`/`, `/inventory`, `/notices`) 로그인 카드 디자인 통일(로고·타이틀·앱 3개 안내 아이콘), 사용자가 디자인 캔버스로 시안 확정 후 반영.
-- 2026-09-29: `/`도 `rs_admin_token`으로 자동 로그인되게 고쳐서, 세 화면 중 어디에 먼저 로그인해도 나머지에서 다시 안 물어보게 됐다(로그인 제출 API 자체는 아직 화면마다 다름).
+- 2026-09-29: `/`도 `rs_admin_token`으로 자동 로그인되게 고쳐서, 세 화면 중 어디에 먼저 로그인해도 나머지에서 다시 안 물어보게 됐다.
+- 2026-09-29: 로그인 제출 API도 `POST /api/login` 하나로 합쳤다(세 화면 다 이걸 부른다). 옛 `/api/auth/login`·`/api/inventory/login`은 다른 프로젝트 테스트가 써서 그대로 남겨뒀다.
 - 로드맵 후보: 보물찾기 운영 준비(규칙 튜닝) → 두 기능 연결(체화 재고 → rare 보물) → 판매점 입력(프로젝트 3).

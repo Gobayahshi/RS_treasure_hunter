@@ -187,6 +187,78 @@ def test_unknown_code_is_still_unregistered(client):
 
 
 # ---------------------------------------------------------------------------
+# 하나로 합친 로그인 제출 API - POST /api/login (2026-09-29 요청)
+# ---------------------------------------------------------------------------
+
+
+def auth_rep2(token):
+    return {"X-Rep-Token": token}
+
+
+def test_unified_login_dealer_rep_works_everywhere(client, fixtures):
+    res = client.post("/api/login", json={"employee_code": fixtures["employee_code"], "password": fixtures["password"]})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["role"] == "dealer"
+    assert body["dealer_id"] == fixtures["dealer_id"]
+    assert body["can_upload"] is True
+    assert body["can_see_all"] is False
+    token = body["token"]
+
+    # 보물찾기(require_rep)와 재고Map(require_inventory_user) 양쪽 다 같은 토큰으로 된다.
+    assert client.get("/api/treasures/nearby?lat=37.5&lng=127.0", headers=auth_rep2(token)).status_code == 200
+    assert client.get("/api/inventory/me", headers=auth_rep2(token)).status_code == 200
+
+
+def test_unified_login_skt_account_works_everywhere(client, admin_token):
+    username = f"skt{uuid.uuid4().hex[:6]}"
+    client.post(
+        "/api/admin/accounts",
+        json={"username": username, "password": "temp1234", "role": "staff"},
+        headers=admin_auth(admin_token),
+    )
+    res = client.post("/api/login", json={"employee_code": username, "password": "temp1234"})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["role"] == "staff"
+    assert body["can_see_all"] is True
+    assert body["can_upload"] is False
+    token = body["token"]
+
+    assert client.get("/api/treasures/nearby?lat=37.5&lng=127.0", headers=auth_rep2(token)).status_code == 200
+    assert client.get("/api/inventory/me", headers=auth_rep2(token)).status_code == 200
+    assert client.get("/api/admin/me", headers=admin_auth(token)).status_code == 200
+
+
+def test_unified_login_allows_dealerless_rep(client, admin_token):
+    """소속 대리점이 없어도 로그인 자체는 된다 - 재고 화면 제약(NO_DEALER)은 그 API가 그때 막는다."""
+    code = f"NODEALER{uuid.uuid4().hex[:5].upper()}"
+    client.post("/api/reps", json={"name": "무소속", "employee_code": code}, headers=admin_auth(admin_token))
+    res = client.post("/api/login", json={"employee_code": code, "password": code})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["role"] == "dealer"
+    token = body["token"]
+    # 초기 비밀번호 상태라 /api/auth/me(예외 대상)는 되고 다른 API는 비밀번호부터 바꾸라고 막힌다.
+    assert client.get("/api/auth/me", headers=auth_rep2(token)).status_code == 200
+    inv = client.get("/api/inventory/me", headers=auth_rep2(token))
+    assert inv.status_code == 403
+    assert inv.get_json()["error"] == "NO_DEALER"
+
+
+def test_unified_login_wrong_password_is_invalid_login(client, fixtures):
+    res = client.post("/api/login", json={"employee_code": fixtures["employee_code"], "password": "wrong"})
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "INVALID_LOGIN"
+
+
+def test_unified_login_unknown_id_is_invalid_login(client):
+    res = client.post("/api/login", json={"employee_code": f"NOBODY{uuid.uuid4().hex[:6]}", "password": "x"})
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "INVALID_LOGIN"
+
+
+# ---------------------------------------------------------------------------
 # 임시 대리점 계정 제거
 # ---------------------------------------------------------------------------
 

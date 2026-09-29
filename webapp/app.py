@@ -872,6 +872,85 @@ def _rep_with_dealer(conn, rep_id: str):
 # ---------------------------------------------------------------------------
 
 
+@app.route("/api/login", methods=["POST"])
+def unified_login():
+    """세 화면(보물찾기 `/`, 재고Map `/inventory`, 공지사항 `/notices`) 공통 로그인.
+
+    대리점 사원 고유ID 또는 SKT 계정 아이디를 모두 받는다. `/api/auth/login`·`/api/inventory/login`과
+    달리 사원 로그인 시 소속 대리점 유무를 따지지 않는다(그 화면별 제약은 각 API가 그때그때
+    `NO_DEALER`로 막는다 - 로그인 자체를 막을 이유는 없다). 응답은 `public_rep()`(보물찾기가 읽는
+    필드)과 `_user_payload()`(재고Map·공지사항이 읽는 필드)를 합친 값이라, 세 화면 다 이 응답
+    하나로 필요한 값을 그대로 읽을 수 있다.
+    """
+    body = request.get_json(force=True)
+    identifier = (body.get("employee_code") or body.get("username") or "").strip()
+    password = body.get("password") or ""
+    if not identifier:
+        return jsonify({"error": "BAD_INPUT", "message": "아이디를 입력해주세요."}), 400
+    if not password:
+        return jsonify({"error": "BAD_INPUT", "message": "비밀번호를 입력해주세요."}), 400
+
+    invalid = (jsonify({"error": "INVALID_LOGIN", "message": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401)
+    employee_code = normalize_employee_code(identifier)
+
+    with db_session() as conn:
+        rep = conn.execute(
+            """
+            SELECT r.*, d.dealer_code, d.name as dealer_name
+            FROM reps r
+            LEFT JOIN dealers d ON d.id = r.dealer_id
+            WHERE UPPER(r.employee_code) = ?
+            """,
+            (employee_code,),
+        ).fetchone()
+
+        if rep and rep["password_hash"] is not None:
+            if not check_password_hash(rep["password_hash"], password):
+                return invalid
+            using_initial = check_password_hash(rep["password_hash"], rep["employee_code"]) and not is_test_account(
+                rep["employee_code"]
+            )
+            if bool(rep["must_change_password"]) != using_initial:
+                conn.execute(
+                    "UPDATE reps SET must_change_password = ? WHERE id = ?",
+                    (1 if using_initial else 0, rep["id"]),
+                )
+            token = _create_rep_session(conn, rep["id"])
+            payload = public_rep(rep)
+            payload.update(_user_payload(_dealer_user_from_rep(dict(rep))))
+            payload["using_initial_password"] = using_initial
+            payload["must_change_password"] = using_initial
+            payload["token"] = token
+            return jsonify(payload)
+
+        # 사원이 아니거나(비밀번호 NULL인 SKT 연결용 레코드 포함) admins 에서 찾는다.
+        admin = conn.execute("SELECT * FROM admins WHERE username = ?", (identifier,)).fetchone()
+        if not admin:
+            admin = conn.execute("SELECT * FROM admins WHERE UPPER(username) = ?", (employee_code,)).fetchone()
+        if not admin or (admin["role"] or "super") not in SKT_ROLES:
+            return invalid
+        if not check_password_hash(admin["password_hash"], password):
+            return invalid
+
+        token = _create_session(conn, admin["id"])
+        linked = _rep_from_token(conn, token)  # 보물찾기용 연결 사원 레코드, 없으면 여기서 만든다
+        payload = public_rep(linked) if linked else {}
+        payload.update(
+            _user_payload(
+                {
+                    "role": admin["role"] or "super",
+                    "username": admin["username"],
+                    "name": admin["name"] or admin["username"],
+                    "must_change_password": admin["must_change_password"],
+                }
+            )
+        )
+        payload["must_change_password"] = bool(admin["must_change_password"])
+        payload["using_initial_password"] = False
+        payload["token"] = token
+        return jsonify(payload)
+
+
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     body = request.get_json(force=True)

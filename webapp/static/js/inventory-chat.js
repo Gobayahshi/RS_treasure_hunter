@@ -1252,7 +1252,7 @@ async function handleLogin() {
     return;
   }
   try {
-    const data = await api("/inventory/login", {
+    const data = await api("/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });

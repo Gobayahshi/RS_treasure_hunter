@@ -303,7 +303,7 @@ async function handleLogin() {
   }
 
   try {
-    const res = await fetch(appUrl("/api/auth/login"), {
+    const res = await fetch(appUrl("/api/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ employee_code: employeeCode, password }),
@@ -312,8 +312,19 @@ async function handleLogin() {
     if (!res.ok) {
       throw new Error(data.message || data.error || `로그인 실패 (${res.status})`);
     }
-    setRepToken(data.token || "");
+    const token = data.token || "";
     delete data.token; // 토큰은 별도 키에만 보관한다
+    if (data.role === "dealer") {
+      usingAdminToken = false;
+      localStorage.removeItem("rs_admin_token");
+      setRepToken(token);
+    } else {
+      // SKT 계정 - /admin·/inventory 와 같은 키(rs_admin_token)를 쓴다. 그래야 그 화면들도
+      // 이 로그인을 바로 SKT 계정으로 알아본다.
+      usingAdminToken = true;
+      setRepToken("");
+      if (token) localStorage.setItem("rs_admin_token", token);
+    }
     rep = data;
     saveRep(rep);
     $("loginPassword").value = "";
