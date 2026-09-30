@@ -770,6 +770,12 @@ body.admin-page #viewOnlyNotice {
   box-shadow: none;
 }
 
+body.admin-page .upload-hint {
+  color: #666;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
 html:has(body.inventory-assist),
 body.inventory-assist {
   width: 100%;

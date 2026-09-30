@@ -2876,24 +2876,29 @@ def import_excel():
         summary = upsert_masters(
             conn, buckets, now_iso(), new_id, remove_missing_reps=remove_missing
         )
-        missing = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM stores WHERE lat = 0 AND lng = 0"
-        ).fetchone()["cnt"]
 
-    # 수천 건은 요청 안에서 돌리면 타임아웃 나므로, 소수만 즉시 변환하고 대량은 백그라운드로 돌린다.
-    if missing <= 30:
+    # 이번 업로드에 판매점 시트가 있을 때만 좌표 변환을 같이 돌린다 — 사원/대리점/SKT 계정만
+    # 올렸는데도 매번 기존 매장 좌표 실패 목록이 딸려 나와 혼란스럽다는 지적(2026-09-30)으로 조건을 걸었다.
+    if buckets.get("stores"):
         with db_session() as conn:
-            summary["geocode"] = geocode_missing_stores(conn)
-    else:
-        threading.Thread(target=_geocode_in_background, daemon=True).start()
-        summary["geocode"] = {
-            "provider": "background",
-            "attempted": missing,
-            "filled": 0,
-            "failed": [],
-            "failed_count": 0,
-            "note": f"좌표 없는 매장 {missing}곳은 백그라운드에서 변환합니다.",
-        }
+            missing = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM stores WHERE lat = 0 AND lng = 0"
+            ).fetchone()["cnt"]
+
+        # 수천 건은 요청 안에서 돌리면 타임아웃 나므로, 소수만 즉시 변환하고 대량은 백그라운드로 돌린다.
+        if missing <= 30:
+            with db_session() as conn:
+                summary["geocode"] = geocode_missing_stores(conn)
+        else:
+            threading.Thread(target=_geocode_in_background, daemon=True).start()
+            summary["geocode"] = {
+                "provider": "background",
+                "attempted": missing,
+                "filled": 0,
+                "failed": [],
+                "failed_count": 0,
+                "note": f"좌표 없는 매장 {missing}곳은 백그라운드에서 변환합니다.",
+            }
     return jsonify(summary), 200
 
 
