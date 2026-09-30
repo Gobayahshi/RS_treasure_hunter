@@ -68,28 +68,11 @@
     </section>
 
     <section class="screen" data-tab="account" data-super-only>
-      <h2>엑셀 마스터 업로드</h2>
+      <h2>계정 현황</h2>
       <div class="card">
         <p class="muted small">
-          판매점코드가 있으면 주소가 같아도 매장을 따로 등록합니다. 기본주소로 GPS를 잡고, 상세주소는 표시용입니다.
+          엑셀 마스터 업로드로 실제 뭐가 등록됐는지 대조할 때 씁니다. 업로드 자체는 "재고지도 운영" 탭으로 옮겼습니다.
         </p>
-        <p class="muted small">
-          영업사원 시트는 사내 <strong>Sales_info</strong> 형식(파트너코드 · 직원명 · LOGIN-ID · 전화번호뒤4자리)도
-          그대로 받습니다. 전화번호는 뒤 4자리만 저장합니다.
-        </p>
-        <p class="muted small">
-          <strong>구분/권한</strong> 열(이름 · ID · PW · 구분/권한)이 있는 시트는 SKT 자체 직원 계정으로 등록됩니다.
-          "admin"이면 총괄, 그 외(예: "SKT")면 조회 전용 직원이 됩니다. 초기 비밀번호는 항상 ID와 같습니다.
-        </p>
-        <button id="templateBtn" class="btn-secondary">양식 다운로드</button>
-        <input id="excelFiles" type="file" accept=".xlsx" multiple />
-        <label class="check-line">
-          <input id="removeMissingReps" type="checkbox" />
-          이 파일에 없는 영업사원 삭제 (방문·포인트 기록까지 사라집니다)
-        </label>
-        <button id="importBtn" class="btn-primary">엑셀 올리기</button>
-        <p id="importMessage" class="muted small"></p>
-        <pre id="importResult" class="import-result hidden"></pre>
         <button id="accountsDownloadBtn" class="btn-secondary">현재 등록 계정 엑셀 다운로드</button>
         <p id="accountsDownloadMessage" class="muted small"></p>
       </div>
@@ -293,6 +276,29 @@
           <p class="muted small">업로드하면 기존 내용을 모두 지우고 새 파일 내용으로 바꿉니다. 되돌릴 수 없습니다.</p>
         </div>
         <p id="modelLookupMsg" class="muted small"></p>
+      </div>
+      <div class="card" data-super-only>
+        <h3 class="section-title">엑셀 마스터 업로드</h3>
+        <p class="muted small">
+          판매점코드가 있으면 주소가 같아도 매장을 따로 등록합니다. 기본주소로 GPS를 잡고, 상세주소는 표시용입니다.
+        </p>
+        <p class="muted small">
+          영업사원 시트는 사내 <strong>Sales_info</strong> 형식(파트너코드 · 직원명 · LOGIN-ID · 전화번호뒤4자리)도
+          그대로 받습니다. 전화번호는 뒤 4자리만 저장합니다.
+        </p>
+        <p class="muted small">
+          <strong>구분/권한</strong> 열(이름 · ID · PW · 구분/권한)이 있는 시트는 SKT 자체 직원 계정으로 등록됩니다.
+          "admin"이면 총괄, 그 외(예: "SKT")면 조회 전용 직원이 됩니다. 초기 비밀번호는 항상 ID와 같습니다.
+        </p>
+        <button id="templateBtn" class="btn-secondary">양식 다운로드</button>
+        <input id="excelFiles" type="file" accept=".xlsx" multiple />
+        <label class="check-line">
+          <input id="removeMissingReps" type="checkbox" />
+          이 파일에 없는 영업사원 삭제 (방문·포인트 기록까지 사라집니다)
+        </label>
+        <button id="importBtn" class="btn-primary">엑셀 올리기</button>
+        <p id="importMessage" class="muted small"></p>
+        <pre id="importResult" class="import-result hidden"></pre>
       </div>
     </section>
 
