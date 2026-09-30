@@ -235,6 +235,16 @@ async function api(path, options = {}) {
   return data;
 }
 
+function closeMobileChat() {
+  document.body.classList.remove("mobile-chat-open");
+}
+
+function closeMobileTools() {
+  document.body.classList.remove("mobile-tools-open");
+  const btn = $("mobileToolsBtn");
+  if (btn) btn.classList.remove("active");
+}
+
 function showLoggedOut() {
   $("screen-chat-login").classList.remove("hidden");
   const passwordScreen = $("screen-chat-password");
@@ -252,6 +262,10 @@ function showLoggedOut() {
     asOf.textContent = "";
     asOf.classList.add("hidden");
   }
+  const mobileChatFab = $("mobileChatFab");
+  if (mobileChatFab) mobileChatFab.classList.add("hidden");
+  closeMobileChat();
+  closeMobileTools();
 }
 
 // 초기 비밀번호를 쓰는 동안에는 서버가 재고 API를 막는다. 변경 화면만 보여준다.
@@ -265,6 +279,10 @@ function showPasswordChange(user) {
   if (uploadBar) uploadBar.classList.add("hidden");
   const filterBar = $("inventoryFilterBar");
   if (filterBar) filterBar.classList.add("hidden");
+  const mobileChatFab = $("mobileChatFab");
+  if (mobileChatFab) mobileChatFab.classList.add("hidden");
+  closeMobileChat();
+  closeMobileTools();
 }
 
 async function handleChangePassword() {
@@ -334,6 +352,10 @@ function showLoggedIn(user) {
     el.classList.toggle("hidden", !inventoryUser.can_see_all);
   });
   if (inventoryUser.can_see_all) loadHqSummary();
+  const mobileChatFab = $("mobileChatFab");
+  if (mobileChatFab) mobileChatFab.classList.remove("hidden");
+  closeMobileChat();
+  closeMobileTools();
   const ready = loadCatalog();
   ensureChatMap();
   return ready;
@@ -2177,5 +2199,24 @@ document.addEventListener("DOMContentLoaded", () => {
   $("chatMicBtn").addEventListener("click", () => {
     addBot("음성 질문/답변은 다음 단계에서 붙입니다. 지금은 글로 물어봐 주세요.");
   });
+  // 스마트폰 레이아웃: 필터·설정은 접이식 드로어로, 챗봇은 별도 창(바텀시트)으로 연다.
+  const mobileToolsBtn = $("mobileToolsBtn");
+  if (mobileToolsBtn) {
+    mobileToolsBtn.addEventListener("click", () => {
+      const open = document.body.classList.toggle("mobile-tools-open");
+      mobileToolsBtn.classList.toggle("active", open);
+    });
+  }
+  const mobileChatFab = $("mobileChatFab");
+  if (mobileChatFab) {
+    mobileChatFab.addEventListener("click", () => {
+      closeMobileTools();
+      document.body.classList.add("mobile-chat-open");
+    });
+  }
+  const chatCloseBtn = $("chatCloseBtn");
+  if (chatCloseBtn) chatCloseBtn.addEventListener("click", closeMobileChat);
+  const mobileChatBackdrop = $("mobileChatBackdrop");
+  if (mobileChatBackdrop) mobileChatBackdrop.addEventListener("click", closeMobileChat);
   restore();
 });

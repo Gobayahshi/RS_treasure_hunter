@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>대리점 재고 - RS-Treasure</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
-<link rel="stylesheet" href="css/style.css?v=20260928maplibre" />
+<link rel="stylesheet" href="css/style.css?v=20260930mobile" />
 </head>
 <body class="admin-page inventory-assist">
 
@@ -74,6 +74,7 @@
     <span id="holdColorMsg" class="muted small"></span>
   </div>
   <nav id="chatNav" class="hidden">
+    <button type="button" id="mobileToolsBtn" class="mobile-tools-btn">☰ 필터·설정</button>
     <span id="asOfBadge" class="as-of-badge muted small hidden"></span>
     <label id="sktDealerWrap" class="skt-dealer-wrap hidden">
       대리점
@@ -87,6 +88,9 @@
     <button id="chatLogoutBtn">로그아웃</button>
   </nav>
 </header>
+
+<div id="mobileChatBackdrop" class="mobile-chat-backdrop"></div>
+<button type="button" id="mobileChatFab" class="mobile-chat-fab hidden">💬 챗봇</button>
 
 <div id="retailStoreModal" class="modal-overlay hidden">
   <div class="modal-box card">
@@ -214,6 +218,10 @@
         </div>
       </div>
       <aside class="inventory-chat">
+        <div class="chat-mobile-head">
+          <span>재고 챗봇</span>
+          <button type="button" id="chatCloseBtn" class="link-btn">닫기 ✕</button>
+        </div>
         <div id="chatLog" class="chat-log"></div>
         <div class="chat-suggestions">
           <button type="button" data-q="오래 묵은 재고 어디가 많아?">오래된 재고</button>

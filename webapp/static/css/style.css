@@ -1334,6 +1334,14 @@ body.inventory-assist .inventory-shell {
   gap: 10px;
 }
 
+/* #chatNav 안 버튼(직영점 등록/로그아웃)은 전역 button{width:100%} 규칙을 그대로 받으면
+   flex row 안에서 여러 100%-너비 아이템이 경쟁하며 서로를 극단적으로 짜부라뜨려
+   글자가 세로로 한 자씩 줄바꿈되는 버그가 난다(2026-09-30, 모바일 실사용에서 발견). */
+#chatNav button {
+  width: auto;
+  margin: 0;
+}
+
 .inventory-upload {
   display: flex;
   flex-direction: column;
@@ -1717,5 +1725,161 @@ body.inventory-assist #chatMap.treasure-map {
   }
   .chat-composer {
     padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* 스마트폰 전용 레이아웃 (2026-09-30): 지도를 우선 보여주고, 필터·설정/챗봇은
+   기본으로 접어둔 뒤 버튼으로 열고 닫는다. 640px보다 넓은 화면(태블릿/PC)에서는
+   아래 규칙이 전혀 적용되지 않는다 — 여기 밖에 있는 기본값은 항상 숨김이다. */
+.mobile-tools-btn,
+.mobile-chat-fab,
+.mobile-chat-backdrop,
+.chat-mobile-head {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  body.inventory-assist .topbar {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  body.inventory-assist .topbar .brand-logo {
+    height: 24px;
+  }
+
+  #chatNav {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  #chatUser {
+    max-width: 45vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-tools-btn {
+    display: inline-flex;
+    order: -1;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  .mobile-tools-btn.active {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #fff;
+  }
+
+  /* 기본은 지도 위주로 접어둔다. 아래는 ☰ 필터·설정 버튼을 눌러야 보인다. */
+  #inventoryUploadBar,
+  #inventoryFilterBar,
+  #holdColorBar,
+  #asOfBadge,
+  #sktDealerWrap,
+  #registerStoreBtn,
+  #chatAdminLink {
+    display: none;
+  }
+
+  #inventoryFilterBar {
+    min-width: 0;
+  }
+
+  body.mobile-tools-open #inventoryUploadBar {
+    display: flex;
+    flex: 1 1 100%;
+  }
+  body.mobile-tools-open #inventoryFilterBar,
+  body.mobile-tools-open #holdColorBar {
+    display: flex;
+    flex: 1 1 100%;
+  }
+  body.mobile-tools-open #asOfBadge,
+  body.mobile-tools-open #sktDealerWrap,
+  body.mobile-tools-open #registerStoreBtn,
+  body.mobile-tools-open #chatAdminLink {
+    display: inline-flex;
+  }
+
+  /* 챗봇을 별도 창(바텀시트)으로 뺀다 — 기본은 지도가 화면 전체를 쓴다. */
+  .inventory-shell {
+    display: block;
+  }
+
+  .inventory-map-pane,
+  .inventory-map-pane.has-area-table {
+    height: 100%;
+  }
+
+  .mobile-chat-fab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    position: fixed;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    z-index: 1500;
+    width: auto;
+    margin: 0;
+    padding: 12px 18px;
+    border: none;
+    border-radius: 999px;
+    background: #2563eb;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+  }
+
+  body.mobile-chat-open .mobile-chat-fab {
+    display: none;
+  }
+
+  .inventory-chat {
+    display: none;
+    position: fixed;
+    inset: 10vh 0 0 0;
+    z-index: 2000;
+    border-left: none;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.28);
+  }
+
+  body.mobile-chat-open .inventory-chat {
+    display: flex;
+  }
+
+  .mobile-chat-backdrop {
+    display: none;
+  }
+
+  body.mobile-chat-open .mobile-chat-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 1900;
+  }
+
+  .chat-mobile-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid #eee;
+    font-weight: 700;
+    flex: none;
+  }
+
+  .chat-mobile-head #chatCloseBtn {
+    width: auto;
+    margin: 0;
   }
 }
