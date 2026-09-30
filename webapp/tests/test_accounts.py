@@ -527,3 +527,33 @@ def test_super_account_cannot_be_deleted(client, admin_token):
     super_account = next(a for a in accounts if a["role"] == "super")
     res = client.delete(f"/api/admin/accounts/{super_account['id']}", headers=admin_auth(admin_token))
     assert res.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 계정 목록 엑셀 다운로드
+# ---------------------------------------------------------------------------
+
+
+def test_super_can_download_accounts_xlsx(client, admin_token, fixtures):
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    res = client.get("/api/admin/accounts.xlsx", headers=admin_auth(admin_token))
+    assert res.status_code == 200
+    assert res.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    wb = load_workbook(BytesIO(res.data))
+    assert wb.sheetnames == ["영업사원", "SKT계정", "대리점"]
+    rep_codes = [row[0].value for row in wb["영업사원"].iter_rows(min_row=2)]
+    assert fixtures["employee_code"] in rep_codes
+
+
+def test_staff_cannot_download_accounts_xlsx(client, admin_token):
+    _, staff_token = create_staff(client, admin_token)
+    res = client.get("/api/admin/accounts.xlsx", headers=admin_auth(staff_token))
+    assert res.status_code == 403
+
+
+def test_rep_cannot_download_accounts_xlsx(client, rep_token):
+    res = client.get("/api/admin/accounts.xlsx", headers={"X-Rep-Token": rep_token})
+    assert res.status_code == 401

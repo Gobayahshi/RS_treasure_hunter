@@ -23,6 +23,7 @@ from confidence import (
 )
 from db import db_session, init_db, start_store_seed_sync
 from excel_import import (
+    build_accounts_xlsx,
     build_stats_xlsx,
     build_template_xlsx,
     delete_rep,
@@ -1408,6 +1409,20 @@ def download_admin_stats():
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=RS_Treasure_stats_{stamp}.xlsx"},
+    )
+
+
+@app.route("/api/admin/accounts.xlsx")
+@require_admin
+def download_admin_accounts():
+    """현재 등록된 영업사원·SKT 계정·대리점 목록. 엑셀 마스터 업로드 결과와 대조할 때 쓴다."""
+    with db_session() as conn:
+        data = build_accounts_xlsx(conn)
+    stamp = kst_now().strftime("%Y%m%d")
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=RS_Treasure_accounts_{stamp}.xlsx"},
     )
 
 

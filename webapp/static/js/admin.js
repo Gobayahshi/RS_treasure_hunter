@@ -623,6 +623,37 @@ async function handleStatsDownload() {
   }
 }
 
+async function handleAccountsDownload() {
+  const msg = $("accountsDownloadMessage");
+  msg.textContent = "만드는 중...";
+  try {
+    const res = await fetch(appUrl("/api/admin/accounts.xlsx"), { headers: authHeaders() });
+    if (res.status === 401) {
+      setToken("");
+      showLoggedOut();
+      throw new Error("관리자 로그인이 필요합니다.");
+    }
+    if (res.status === 403) throw new Error("총괄 계정만 다운로드할 수 있습니다.");
+    if (!res.ok) throw new Error("계정 파일을 만들지 못했습니다.");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const now = new Date();
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+      now.getDate()
+    ).padStart(2, "0")}`;
+    a.download = `RS_Treasure_accounts_${stamp}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    msg.textContent = "다운로드했습니다.";
+  } catch (err) {
+    msg.textContent = String(err.message || err);
+  }
+}
+
 async function handleTemplateDownload() {
   const msg = $("importMessage");
   try {
@@ -1494,6 +1525,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("plantUseMyLocationBtn").addEventListener("click", handlePlantUseMyLocation);
   $("savePointsBtn").addEventListener("click", handleSavePoints);
   $("statsDownloadBtn").addEventListener("click", handleStatsDownload);
+  if ($("accountsDownloadBtn")) $("accountsDownloadBtn").addEventListener("click", handleAccountsDownload);
   $("templateBtn").addEventListener("click", handleTemplateDownload);
   $("adminChangePasswordBtn").addEventListener("click", handleChangeAdminPassword);
   $("addStoreBtn").addEventListener("click", handleAddStore);

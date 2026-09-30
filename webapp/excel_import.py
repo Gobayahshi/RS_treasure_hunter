@@ -694,3 +694,95 @@ def build_stats_xlsx(conn) -> bytes:
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def build_accounts_xlsx(conn) -> bytes:
+    """현재 등록된 영업사원/SKT 계정/대리점 목록 엑셀. 엑셀 업로드 후 어떤 계정이
+    실제로 만들어졌는지(또는 소속대리점을 못 찾아 건너뛰었는지) 대조하기 위한 용도."""
+    wb = Workbook()
+    header_fill = PatternFill("solid", fgColor="1D4ED8")
+    header_font = Font(color="FFFFFF", bold=True)
+
+    def _style_header(ws, headers, width=18):
+        ws.append(headers)
+        for col in range(1, len(headers) + 1):
+            cell = ws.cell(1, col)
+            cell.fill = header_fill
+            cell.font = header_font
+            ws.column_dimensions[get_column_letter(col)].width = width
+        ws.freeze_panes = "A2"
+
+    rep_rows = conn.execute(
+        """
+        SELECT
+            r.employee_code,
+            r.name,
+            d.dealer_code,
+            d.name AS dealer_name,
+            r.dealer_role,
+            r.must_change_password,
+            r.linked_admin_id,
+            r.created_at
+        FROM reps r
+        LEFT JOIN dealers d ON d.id = r.dealer_id
+        ORDER BY d.name, r.name
+        """
+    ).fetchall()
+
+    rep_ws2 = wb.active
+    rep_ws2.title = "영업사원"
+    _style_header(
+        rep_ws2,
+        ["고유ID", "이름", "소속대리점ID", "소속대리점명", "구분", "비밀번호변경필요", "SKT연동계정", "생성일시"],
+    )
+    for row in rep_rows:
+        rep_ws2.append(
+            [
+                row["employee_code"],
+                row["name"],
+                row["dealer_code"] or "",
+                row["dealer_name"] or "소속 없음",
+                row["dealer_role"] or "",
+                "예" if row["must_change_password"] else "아니오",
+                "예" if row["linked_admin_id"] else "",
+                row["created_at"] or "",
+            ]
+        )
+
+    admin_rows = conn.execute(
+        """
+        SELECT username, name, role, must_change_password, created_at
+        FROM admins
+        ORDER BY role, username
+        """
+    ).fetchall()
+
+    admin_ws = wb.create_sheet("SKT계정")
+    _style_header(admin_ws, ["아이디", "이름", "구분", "비밀번호변경필요", "생성일시"])
+    for row in admin_rows:
+        admin_ws.append(
+            [
+                row["username"],
+                row["name"] or "",
+                "총괄" if row["role"] == "super" else "직원",
+                "예" if row["must_change_password"] else "아니오",
+                row["created_at"] or "",
+            ]
+        )
+
+    dealer_rows = conn.execute(
+        """
+        SELECT d.dealer_code, d.name, (SELECT COUNT(*) FROM reps r WHERE r.dealer_id = d.id) AS rep_count
+        FROM dealers d
+        ORDER BY d.name
+        """
+    ).fetchall()
+
+    dealer_ws = wb.create_sheet("대리점")
+    _style_header(dealer_ws, ["대리점ID", "대리점명", "소속사원수"], width=16)
+    for row in dealer_rows:
+        dealer_ws.append([row["dealer_code"], row["name"], int(row["rep_count"] or 0)])
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
