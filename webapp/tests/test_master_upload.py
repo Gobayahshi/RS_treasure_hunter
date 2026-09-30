@@ -172,6 +172,29 @@ def test_remove_missing_reps_deletes_people_and_their_records(client, server, ad
         assert conn.execute("SELECT 1 FROM reps WHERE employee_code = 'D14746KEEP'").fetchone()
 
 
+def test_remove_missing_reps_keeps_test_accounts(client, server, admin_token, fixtures):
+    """Sales_info 재업로드는 대리점별 TEST_1/TEST_2 시연 계정을 지우면 안 된다."""
+    from db import db_session
+
+    with db_session() as conn:
+        dealer_code = conn.execute(
+            "SELECT dealer_code FROM dealers WHERE id = ?", (fixtures["dealer_id"],)
+        ).fetchone()["dealer_code"]
+
+    res = client.post("/api/admin/test-accounts", headers=admin_auth(admin_token))
+    assert res.status_code == 201
+
+    data = build_sales_info([[dealer_code, "다른대리점명", "x", "그대로있음", fixtures["employee_code"], "1111"]])
+    res = upload(client, admin_token, data, remove_missing=True)
+    assert res.status_code == 200
+
+    with db_session() as conn:
+        code1 = f"{dealer_code.upper()}TEST_1"
+        code2 = f"{dealer_code.upper()}TEST_2"
+        assert conn.execute("SELECT 1 FROM reps WHERE UPPER(employee_code) = ?", (code1,)).fetchone()
+        assert conn.execute("SELECT 1 FROM reps WHERE UPPER(employee_code) = ?", (code2,)).fetchone()
+
+
 def test_upload_without_flag_keeps_everyone(client, server, admin_token, fixtures):
     from db import db_session
 

@@ -41,6 +41,8 @@ LNG_ALIASES = {"경도", "lng", "lon", "longitude"}
 MODEL_LOOKUP_NAME_ALIASES = {"모델명", "modelname", "model_name"}
 MODEL_LOOKUP_CANONICAL_ALIASES = {"대표모델", "대표모델명", "canonicalmodel", "canonical_model"}
 MODEL_LOOKUP_PETNAME_ALIASES = {"펫네임", "펫네임명", "petname", "pet_name", "애칭"}
+# app.py의 TEST_ACCOUNT_SUFFIXES와 같은 값. 순환 import를 피하려고 여기 따로 둔다.
+TEST_ACCOUNT_SUFFIXES = ("TEST_1", "TEST_2")
 
 
 def cell_str(value: Any) -> str:
@@ -368,7 +370,12 @@ def upsert_masters(
 
     if remove_missing_reps and seen_rep_codes:
         for row in conn.execute("SELECT id, employee_code FROM reps").fetchall():
-            if normalize_employee_code(row["employee_code"]) in seen_rep_codes:
+            code_upper = normalize_employee_code(row["employee_code"])
+            if code_upper in seen_rep_codes:
+                continue
+            if code_upper.endswith(TEST_ACCOUNT_SUFFIXES):
+                # 대리점별 시연용 테스트 계정(TEST_1/TEST_2)은 Sales_info 파일에 없는 게
+                # 정상이라, "파일에 없는 사원 삭제"에 휩쓸리지 않게 예외로 둔다.
                 continue
             delete_rep(conn, row["id"])
             summary["reps"]["removed"] += 1
