@@ -180,3 +180,109 @@ def test_include_partner_toggle_filters_out_partner_stores(client, fixtures, adm
     )
     assert with_partner.get_json()["total_qty"] == 2
     assert with_partner.get_json()["include_partner"] is True
+
+
+def _make_second_dealer_rep():
+    """대리점 격리(다른 대리점의 직영점은 못 보고/못 지운다) 테스트용으로 대리점을 하나 더 만든다."""
+    import uuid
+    from datetime import datetime
+
+    import app as server_module
+    from db import db_session
+
+    now = datetime.utcnow().isoformat()
+    dealer_id = uuid.uuid4().hex
+    rep_id = uuid.uuid4().hex
+    employee_code = uuid.uuid4().hex[:7]
+    password = "pw5678"
+    with db_session() as conn:
+        conn.execute(
+            "INSERT INTO dealers (id, dealer_code, name, created_at) VALUES (?,?,?,?)",
+            (dealer_id, f"D{uuid.uuid4().hex[:5]}", "테스트대리점2", now),
+        )
+        conn.execute(
+            "INSERT INTO reps (id, dealer_id, name, employee_code, password_hash, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (rep_id, dealer_id, "박영희", employee_code, server_module.hash_password(password), now),
+        )
+    return {"dealer_id": dealer_id, "employee_code": employee_code, "password": password}
+
+
+def _login_headers(client, employee_code, password):
+    token = client.post(
+        "/api/inventory/login", json={"username": employee_code, "password": password}
+    ).get_json()["token"]
+    return {"X-Admin-Token": token}
+
+
+def test_dealer_sees_and_manages_only_own_retail_stores(client, fixtures, monkeypatch):
+    _stub_geocode(monkeypatch)
+    headers = rep_headers(client, fixtures)
+    created = client.post(
+        "/api/inventory/retail-store",
+        json={"store_code": "D999990010", "name": "1대리점 직영점", "address": "서울시 강동구 1"},
+        headers=headers,
+    ).get_json()["store"]
+
+    own_list = client.get("/api/inventory/retail-stores", headers=headers).get_json()["items"]
+    assert any(s["id"] == created["id"] for s in own_list)
+
+    other = _make_second_dealer_rep()
+    other_headers = _login_headers(client, other["employee_code"], other["password"])
+    other_list = client.get("/api/inventory/retail-stores", headers=other_headers).get_json()["items"]
+    assert all(s["id"] != created["id"] for s in other_list)
+
+    forbidden = client.delete(f"/api/inventory/retail-store/{created['id']}", headers=other_headers)
+    assert forbidden.status_code == 403
+    assert forbidden.get_json()["error"] == "FORBIDDEN"
+
+    ok = client.delete(f"/api/inventory/retail-store/{created['id']}", headers=headers)
+    assert ok.status_code == 200
+    assert ok.get_json()["deleted"] is True
+    after = client.get("/api/inventory/retail-stores", headers=headers).get_json()["items"]
+    assert all(s["id"] != created["id"] for s in after)
+
+
+def test_skt_super_lists_all_retail_stores_and_can_delete_any(client, fixtures, admin_token, monkeypatch):
+    _stub_geocode(monkeypatch)
+    headers = rep_headers(client, fixtures)
+    created = client.post(
+        "/api/inventory/retail-store",
+        json={"store_code": "D999990011", "name": "총괄이 보는 직영점", "address": "서울시 송파구 1"},
+        headers=headers,
+    ).get_json()["store"]
+
+    admin_headers = admin_auth(admin_token)
+    all_list = client.get("/api/inventory/retail-stores", headers=admin_headers).get_json()["items"]
+    assert any(s["id"] == created["id"] for s in all_list)
+
+    ok = client.delete(f"/api/inventory/retail-store/{created['id']}", headers=admin_headers)
+    assert ok.status_code == 200
+    assert ok.get_json()["deleted"] is True
+
+
+def test_delete_retail_store_rejects_partner_code(client, fixtures):
+    headers = rep_headers(client, fixtures)
+    res = client.delete(f"/api/inventory/retail-store/{fixtures['store_id']}", headers=headers)
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "NOT_RETAIL_CODE"
+
+
+def test_skt_staff_cannot_list_or_delete_retail_stores(client, admin_token, fixtures, monkeypatch):
+    _stub_geocode(monkeypatch)
+    headers = rep_headers(client, fixtures)
+    created = client.post(
+        "/api/inventory/retail-store",
+        json={"store_code": "D999990012", "name": "직원 조회 시도", "address": "서울시 노원구 1"},
+        headers=headers,
+    ).get_json()["store"]
+
+    _, staff_token = create_staff(client, admin_token)
+    staff_headers = admin_auth(staff_token)
+    listed = client.get("/api/inventory/retail-stores", headers=staff_headers)
+    assert listed.status_code == 403
+    assert listed.get_json()["error"] == "VIEW_ONLY"
+
+    deleted = client.delete(f"/api/inventory/retail-store/{created['id']}", headers=staff_headers)
+    assert deleted.status_code == 403
+    assert deleted.get_json()["error"] == "VIEW_ONLY"

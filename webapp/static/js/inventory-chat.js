@@ -266,6 +266,7 @@ function showLoggedOut() {
   if (mobileChatFab) mobileChatFab.classList.add("hidden");
   closeMobileChat();
   closeMobileTools();
+  closeSettingsModal();
 }
 
 // 초기 비밀번호를 쓰는 동안에는 서버가 재고 API를 막는다. 변경 화면만 보여준다.
@@ -283,6 +284,7 @@ function showPasswordChange(user) {
   if (mobileChatFab) mobileChatFab.classList.add("hidden");
   closeMobileChat();
   closeMobileTools();
+  closeSettingsModal();
 }
 
 async function handleChangePassword() {
@@ -332,9 +334,9 @@ function showLoggedIn(user) {
   const uploadBar = $("inventoryUploadBar");
   // SKT 직원은 조회 전용이라 업로드를 숨긴다. (예전 응답에는 can_upload 가 없어 기본 허용)
   if (uploadBar) uploadBar.classList.toggle("hidden", inventoryUser.can_upload === false);
-  const registerBtn = $("registerStoreBtn");
-  // 직영점 등록도 재고 업로드와 같은 권한(대리점 직원 누구나 + SKT는 총괄만)이다.
-  if (registerBtn) registerBtn.classList.toggle("hidden", inventoryUser.can_upload === false);
+  const settingsRetailSection = $("settingsRetailSection");
+  // 직영점 등록/관리도 재고 업로드와 같은 권한(대리점 직원 누구나 + SKT는 총괄만)이다.
+  if (settingsRetailSection) settingsRetailSection.classList.toggle("hidden", inventoryUser.can_upload === false);
   const filterBar = $("inventoryFilterBar");
   if (filterBar) filterBar.classList.remove("hidden");
   const holdColorBar = $("holdColorBar");
@@ -1126,6 +1128,117 @@ async function waitForUploadJob(jobId, file) {
   throw new Error("저장이 아직 끝나지 않았습니다. 잠시 후 새로고침해 보세요.");
 }
 
+function openSettingsModal() {
+  const modal = $("settingsModal");
+  if (!modal) return;
+  ["settingsCurrentPassword", "settingsNewPassword", "settingsNewPasswordConfirm"].forEach((id) => {
+    if ($(id)) $(id).value = "";
+  });
+  const msg = $("settingsPasswordMessage");
+  if (msg) {
+    msg.textContent = "";
+    msg.classList.remove("error");
+  }
+  modal.classList.remove("hidden");
+  if (inventoryUser && inventoryUser.can_upload !== false) loadMyRetailStores().catch(() => {});
+}
+
+function closeSettingsModal() {
+  const modal = $("settingsModal");
+  if (modal) modal.classList.add("hidden");
+}
+
+async function handleSettingsChangePassword() {
+  const msg = $("settingsPasswordMessage");
+  const current = $("settingsCurrentPassword").value;
+  const next = $("settingsNewPassword").value;
+  const confirm = $("settingsNewPasswordConfirm").value;
+  msg.classList.remove("error");
+  if (!current || !next) {
+    msg.textContent = "현재/새 비밀번호를 입력해주세요.";
+    msg.classList.add("error");
+    return;
+  }
+  if (next.length < 4) {
+    msg.textContent = "새 비밀번호는 4자 이상이어야 합니다.";
+    msg.classList.add("error");
+    return;
+  }
+  if (next !== confirm) {
+    msg.textContent = "새 비밀번호 확인이 일치하지 않습니다.";
+    msg.classList.add("error");
+    return;
+  }
+  // 대리점 직원은 사원 계정, SKT는 관리자 계정이라 바꾸는 API가 다르다 (강제 변경 화면과 동일한 규칙).
+  const path = inventoryUser.role === "dealer" ? "/auth/change-password" : "/admin/change-password";
+  try {
+    await api(path, {
+      method: "POST",
+      body: JSON.stringify({ current_password: current, new_password: next }),
+    });
+    ["settingsCurrentPassword", "settingsNewPassword", "settingsNewPasswordConfirm"].forEach((id) => {
+      $(id).value = "";
+    });
+    msg.classList.remove("error");
+    msg.textContent = "비밀번호를 변경했습니다.";
+  } catch (err) {
+    msg.textContent = friendlyError(err);
+    msg.classList.add("error");
+  }
+}
+
+async function loadMyRetailStores() {
+  const list = $("settingsRetailList");
+  if (!list) return;
+  list.innerHTML = `<p class="muted small">불러오는 중...</p>`;
+  try {
+    const data = await api("/inventory/retail-stores");
+    renderMyRetailStores(data.items || []);
+  } catch (err) {
+    list.innerHTML = `<p class="muted small error">${escHtml(friendlyError(err))}</p>`;
+  }
+}
+
+function renderMyRetailStores(items) {
+  const list = $("settingsRetailList");
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = `<p class="muted small">등록한 직영점이 없습니다.</p>`;
+    return;
+  }
+  list.innerHTML = items
+    .map((item) => {
+      const dealerLine = inventoryUser && inventoryUser.can_see_all
+        ? `<span class="muted small">${escHtml(item.dealer_name || item.dealer_code || "")}</span>`
+        : "";
+      const coordNote = item.geocoded ? "" : `<span class="muted small error">좌표 미확인</span>`;
+      return `
+        <div class="settings-retail-row card">
+          <div>
+            <strong>${escHtml(item.name)}</strong>
+            <span class="muted small">${escHtml(item.store_code)}</span>
+            ${dealerLine}
+            ${coordNote}
+            <div class="muted small">${escHtml(item.address || "")} ${escHtml(item.detail_address || "")}</div>
+          </div>
+          <button type="button" class="link-btn" data-delete-retail="${escHtml(item.id)}">삭제</button>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function handleDeleteRetailStore(storeId) {
+  if (!confirm("이 직영점 등록을 지울까요? 지도에서 바로 사라지고 되돌릴 수 없습니다.")) return;
+  try {
+    await api(`/inventory/retail-store/${encodeURIComponent(storeId)}`, { method: "DELETE" });
+    await loadMyRetailStores();
+    loadInventoryMap(lastCoords).catch(() => {});
+  } catch (err) {
+    alert(friendlyError(err));
+  }
+}
+
 function openRetailStoreModal() {
   const modal = $("retailStoreModal");
   if (!modal) return;
@@ -1207,6 +1320,7 @@ async function handleRetailStoreSubmit() {
     if (data.geocoded) {
       setTimeout(closeRetailStoreModal, 900);
       loadInventoryMap(lastCoords).catch(() => {});
+      loadMyRetailStores().catch(() => {});
     }
   } catch (err) {
     msg.textContent = friendlyError(err);
@@ -2069,8 +2183,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("chatChangePasswordBtn")) $("chatChangePasswordBtn").addEventListener("click", handleChangePassword);
   if ($("chatPasswordLogoutBtn")) $("chatPasswordLogoutBtn").addEventListener("click", handleLogout);
   $("inventoryUploadBtn").addEventListener("click", handleInventoryUpload);
-  const registerBtn = $("registerStoreBtn");
-  if (registerBtn) registerBtn.addEventListener("click", openRetailStoreModal);
+  const settingsRegisterRetailBtn = $("settingsRegisterRetailBtn");
+  if (settingsRegisterRetailBtn) settingsRegisterRetailBtn.addEventListener("click", openRetailStoreModal);
   const retailCloseBtn = $("retailStoreCloseBtn");
   if (retailCloseBtn) retailCloseBtn.addEventListener("click", closeRetailStoreModal);
   const retailAddress = $("retailStoreAddress");
@@ -2081,6 +2195,25 @@ document.addEventListener("DOMContentLoaded", () => {
   if (retailModal) {
     retailModal.addEventListener("click", (e) => {
       if (e.target === retailModal) closeRetailStoreModal();
+    });
+  }
+  const settingsBtn = $("settingsBtn");
+  if (settingsBtn) settingsBtn.addEventListener("click", openSettingsModal);
+  const settingsCloseBtn = $("settingsCloseBtn");
+  if (settingsCloseBtn) settingsCloseBtn.addEventListener("click", closeSettingsModal);
+  const settingsChangePasswordBtn = $("settingsChangePasswordBtn");
+  if (settingsChangePasswordBtn) settingsChangePasswordBtn.addEventListener("click", handleSettingsChangePassword);
+  const settingsModal = $("settingsModal");
+  if (settingsModal) {
+    settingsModal.addEventListener("click", (e) => {
+      if (e.target === settingsModal) closeSettingsModal();
+    });
+  }
+  const settingsRetailList = $("settingsRetailList");
+  if (settingsRetailList) {
+    settingsRetailList.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-delete-retail]");
+      if (btn) handleDeleteRetailStore(btn.getAttribute("data-delete-retail"));
     });
   }
   const holderPartnerChk = $("holderPartnerChk");

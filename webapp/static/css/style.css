@@ -964,6 +964,41 @@ body.inventory-assist .topbar .brand-logo {
   margin: 0;
 }
 
+.settings-modal-box {
+  max-width: 480px;
+}
+
+#settingsRetailSection .between .link-btn {
+  width: auto;
+  flex: none;
+  margin: 0;
+}
+
+#settingsRetailList {
+  max-height: 260px;
+  overflow-y: auto;
+  gap: 8px;
+}
+
+.settings-retail-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.settings-retail-row strong {
+  display: block;
+}
+
+.settings-retail-row .link-btn {
+  width: auto;
+  flex: none;
+  margin: 0;
+  color: #dc2626;
+}
+
 body.inventory-assist main {
   flex: 1;
   min-height: 0;
@@ -1783,7 +1818,6 @@ body.inventory-assist #chatMap.treasure-map {
   #holdColorBar,
   #asOfBadge,
   #sktDealerWrap,
-  #registerStoreBtn,
   #chatAdminLink {
     display: none;
   }
@@ -1803,7 +1837,6 @@ body.inventory-assist #chatMap.treasure-map {
   }
   body.mobile-tools-open #asOfBadge,
   body.mobile-tools-open #sktDealerWrap,
-  body.mobile-tools-open #registerStoreBtn,
   body.mobile-tools-open #chatAdminLink {
     display: inline-flex;
   }

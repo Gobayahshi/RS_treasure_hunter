@@ -2059,6 +2059,80 @@ def create_retail_store():
     return jsonify({"store": row_to_dict(store), "geocoded": bool(geocoded), "message": message}), 201
 
 
+@app.route("/api/inventory/retail-stores", methods=["GET"])
+@require_inventory_uploader
+def list_retail_stores():
+    """대리점 직원이 직접 등록한 직영점(D코드) 목록. 대리점은 자기 것만, SKT 총괄은 전체(또는 dealer_code로 좁혀) 본다."""
+    user = g.inventory_user
+    dealer_code_filter = (request.args.get("dealer_code") or "").strip()
+    with db_session() as conn:
+        if _is_dealer_user(user):
+            rows = conn.execute(
+                """
+                SELECT s.*, d.dealer_code, d.name AS dealer_name FROM stores s
+                LEFT JOIN dealers d ON d.id = s.dealer_id WHERE s.dealer_id = ?
+                ORDER BY s.created_at DESC
+                """,
+                (user.get("dealer_id") or "",),
+            ).fetchall()
+        elif dealer_code_filter:
+            dealer = conn.execute(
+                "SELECT * FROM dealers WHERE dealer_code = ?", (dealer_code_filter,)
+            ).fetchone()
+            if not dealer:
+                return jsonify({"error": "DEALER_NOT_FOUND", "message": "대리점을 찾지 못했습니다."}), 404
+            rows = conn.execute(
+                """
+                SELECT s.*, d.dealer_code, d.name AS dealer_name FROM stores s
+                LEFT JOIN dealers d ON d.id = s.dealer_id WHERE s.dealer_id = ?
+                ORDER BY s.created_at DESC
+                """,
+                (dealer["id"],),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT s.*, d.dealer_code, d.name AS dealer_name FROM stores s
+                LEFT JOIN dealers d ON d.id = s.dealer_id
+                ORDER BY s.created_at DESC
+                """
+            ).fetchall()
+    items = [row_to_dict(r) for r in rows if classify_holder(r["store_code"]) == "retail"]
+    for item in items:
+        item["geocoded"] = bool(item.get("lat") or item.get("lng"))
+    return jsonify({"items": items})
+
+
+@app.route("/api/inventory/retail-store/<store_id>", methods=["DELETE"])
+@require_inventory_uploader
+def delete_retail_store(store_id):
+    """직영점 등록 취소. 대리점은 자기 소속 것만, SKT 총괄은 아무 대리점 것이나 지울 수 있다.
+
+    등록만 해두고 재고를 한 번도 안 올린 직영점은 stores 행만 지우면 되지만, 이미 재고를
+    올린 적 있는 직영점은 지워도 다음 업로드 전까지 지도에 남아 보이면 혼란스러우니
+    그 대리점의 해당 매장코드 재고도 함께 지운다.
+    """
+    user = g.inventory_user
+    with db_session() as conn:
+        store = conn.execute("SELECT * FROM stores WHERE id = ?", (store_id,)).fetchone()
+        if not store:
+            return jsonify({"error": "STORE_NOT_FOUND", "message": "매장을 찾지 못했습니다."}), 404
+        if classify_holder(store["store_code"]) != "retail":
+            return jsonify(
+                {"error": "NOT_RETAIL_CODE", "message": "직영점(D코드)만 이 화면으로 지울 수 있습니다."}
+            ), 400
+        if _is_dealer_user(user) and store["dealer_id"] != (user.get("dealer_id") or ""):
+            return jsonify(
+                {"error": "FORBIDDEN", "message": "다른 대리점의 직영점은 지울 수 없습니다."}
+            ), 403
+        conn.execute("DELETE FROM stores WHERE id = ?", (store_id,))
+        conn.execute(
+            "DELETE FROM inventory_items WHERE store_code = ? AND dealer_id = ?",
+            (store["store_code"], store["dealer_id"]),
+        )
+    return jsonify({"deleted": True})
+
+
 # ---------------------------------------------------------------------------
 # 보물(Treasure)
 # ---------------------------------------------------------------------------
